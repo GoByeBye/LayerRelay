@@ -1,0 +1,13 @@
+{
+  "name": "3d-livestream",
+  "version": "1.0.0",
+  "description": "Local OBS overlay for a Prusa CORE One + INDX toolchanger: live print, remaining time, nozzle temp, current tool and tool-swap count.",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

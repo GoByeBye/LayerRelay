@@ -1,0 +1,510 @@
+<!--
+  OBS browser-source overlay for a Prusa CORE One + INDX toolchanger.
+  Full-width bottom banner sized for a 1920x150 OBS browser source (it fills the source
+  exactly via 100vh/100vw). Two bands: top = thumbnail + job title/bed-message + progress;
+  bottom = all print stats in one even 10-column row. Transparent page, only the banner shows.
+  Enable "Refresh browser when scene becomes active" for a cheap manual recovery.
+  Self-contained: no external requests. Polls /api/state on the same origin.
+-->
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --accent: #fa6831;
+    --card-bg: rgba(12, 14, 18, 0.7);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+  body {
+    font-family: system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #fff;
+    -webkit-font-smoothing: antialiased;
+  }
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  #card {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    width: 100vw; height: 100vh;          /* fill the OBS source (sized 1920x150) exactly */
+    display: flex; flex-direction: column; justify-content: center; gap: 12px;
+    background: var(--card-bg);
+    border-top: 6px solid var(--accent);
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    padding: 16px 34px;
+    overflow: hidden;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+  }
+  #card.ready { opacity: 1; }
+  #card.stale { opacity: 0.9; }
+
+  /* Printer disconnected: keep the last-known data visible but grayed + dimmed. */
+  #card.offline #thumb-box,
+  #card.offline #progress,
+  #card.offline #stats,
+  #card.offline #name {
+    filter: grayscale(1);
+    opacity: 0.4;
+    transition: opacity 0.3s ease, filter 0.3s ease;
+  }
+  #card.offline { border-top-color: #e5484d; }
+  #offline-tag { display: none; }
+  #card.offline #offline-tag {
+    display: inline-flex; align-items: center; gap: 5px;
+    color: #ff7a7a; font-weight: 600;
+  }
+  #offline-tag::before {
+    content: ""; width: 7px; height: 7px; border-radius: 50%;
+    background: #e5484d; animation: pulse 1.2s ease-in-out infinite;
+  }
+  #card.offline #stateline-normal { display: none; }
+
+  /* --- "Gone to bed" mode (?bed=true) -------------------------------------- */
+  /* Swaps the job name/state for an away message; thumbnail, progress and print
+     stats stay visible so the stream still shows the print running overnight. */
+  #sleep-msg { display: none; }
+  #card.asleep #name, #card.asleep #stateline { display: none; }
+  #card.asleep #sleep-msg {
+    display: flex; align-items: center; gap: 14px;
+    font-size: 25px; font-weight: 600; color: #fff; line-height: 1.2;
+  }
+  #card.asleep #sleep-msg .zzz {
+    font-size: 30px; flex: 0 0 auto;
+    animation: pulse 2.2s ease-in-out infinite;
+  }
+  #card.asleep { border-top-color: #7c86ff; }
+
+  /* Per-state accent colour */
+  #card[data-state="PRINTING"] { --accent: #fa6831; }
+  #card[data-state="PAUSED"]   { --accent: #f5a623; }
+  #card[data-state="FINISHED"] { --accent: #3ddc84; }
+  #card[data-state="ERROR"]    { --accent: #e5484d; }
+  #card[data-state="IDLE"], #card[data-state="UNKNOWN"] { --accent: rgba(255,255,255,0.28); }
+
+  /* === Top band: thumbnail + title/bed-message + progress ================== */
+  .top { display: flex; align-items: center; gap: 28px; min-width: 0; }
+  .header { display: flex; gap: 18px; align-items: center; position: relative; flex: 0 1 auto; min-width: 0; }
+  #thumb-box {
+    width: 92px; height: 92px; flex: 0 0 92px;
+    border-radius: 12px; overflow: hidden;
+    background: rgba(255, 255, 255, 0.06);
+    display: flex; align-items: center; justify-content: center;
+  }
+  #thumb { width: 100%; height: 100%; object-fit: cover; display: block; }
+  #thumb.hidden { display: none; }
+  .titles { display: flex; flex-direction: column; min-width: 0; gap: 4px; }
+  #name {
+    font-size: 25px; font-weight: 600; color: #fff;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    max-width: 100%;
+  }
+  #stateline { font-size: 18px; color: rgba(255, 255, 255, 0.62); white-space: nowrap; }
+  #stale-dot {
+    position: absolute; top: -4px; right: -4px;
+    width: 12px; height: 12px; border-radius: 50%;
+    background: #f5a623; display: none;
+  }
+  #card.stale #stale-dot { display: block; animation: pulse 1.4s ease-in-out infinite; }
+  #card.dead #stale-dot { background: #e5484d; display: block; }
+
+  #progress { flex: 0 0 600px; margin-left: auto; }
+  .track { height: 10px; border-radius: 5px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+  #fill {
+    height: 100%; width: 0%;
+    background: linear-gradient(90deg, var(--accent), #ff8a50);
+    border-radius: 5px;
+    transition: width 0.6s linear;
+  }
+  #card:not([data-state="PRINTING"]) #fill { background: var(--accent); }
+  .pmeta { display: flex; justify-content: space-between; align-items: baseline; margin-top: 8px; font-size: 18px; color: rgba(255,255,255,0.7); white-space: nowrap; }
+  #pct { font-weight: 600; color: #fff; }
+  #filament { color: rgba(255,255,255,0.55); }
+  #eta { white-space: nowrap; }
+
+  /* === Bottom band: every stat in ONE even row (no wrap) =================== */
+  #stats {
+    display: grid; grid-template-columns: repeat(10, 1fr);
+    align-items: end; column-gap: 16px;
+    border-top: 1px solid rgba(255, 255, 255, 0.10);
+    padding-top: 10px;
+  }
+  .stat { display: flex; flex-direction: column; gap: 3px; min-width: 0; white-space: nowrap; }
+  .stat .label {
+    font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em;
+    color: rgba(255, 255, 255, 0.5);
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .stat .value {
+    font-size: 24px; font-weight: 600; color: #fff;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .sub { color: rgba(255,255,255,0.5); font-weight: 400; }
+  .badge {
+    display: inline-block; padding: 1px 12px; border-radius: 999px;
+    background: rgba(250, 104, 49, 0.18); color: var(--accent);
+    font-weight: 700; font-size: 21px;
+  }
+  .badge.swapping { animation: pulse 1.2s ease-in-out infinite; }
+
+  /* === Completion summary: fills the bottom band when a print is FINISHED === */
+  #summary { display: none; }
+  #card[data-state="FINISHED"] #summary {
+    display: flex; align-items: end; gap: 60px;
+    border-top: 1px solid rgba(255, 255, 255, 0.10);
+    padding-top: 10px;
+  }
+  .sumtile { display: flex; flex-direction: column; gap: 3px; white-space: nowrap; }
+  .sumtile .label {
+    font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em;
+    color: rgba(255, 255, 255, 0.5);
+  }
+  .sumtile .value { font-size: 26px; font-weight: 600; color: #fff; }
+  .sumtile .value.accent { color: var(--accent); }
+
+  /* Hide print-only sections when not actively printing/paused */
+  #card:not([data-state="PRINTING"]):not([data-state="PAUSED"]) .print-only { display: none; }
+
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+</style>
+
+<div id="card" data-state="UNKNOWN">
+  <div class="top">
+    <div class="header">
+      <div id="thumb-box"><img id="thumb" class="hidden" alt="" /></div>
+      <div class="titles">
+        <div id="name">—</div>
+        <div id="stateline">
+          <span id="stateline-normal">connecting…</span>
+          <span id="offline-tag">Printer disconnected</span>
+        </div>
+        <div id="sleep-msg"><span class="zzz">💤</span><span id="sleep-text"></span></div>
+      </div>
+      <div id="stale-dot"></div>
+    </div>
+
+    <div id="progress" class="print-only">
+      <div class="track"><div id="fill"></div></div>
+      <div class="pmeta"><span id="pct" class="tnum">0%</span><span id="filament" class="tnum">—</span><span id="eta" class="tnum">—</span></div>
+    </div>
+  </div>
+
+  <div id="stats" class="print-only">
+    <div class="stat">
+      <span class="label">Nozzle</span>
+      <span class="value tnum" id="temp">—</span>
+    </div>
+    <div class="stat">
+      <span class="label">Bed</span>
+      <span class="value tnum" id="bed">—</span>
+    </div>
+    <div class="stat">
+      <span class="label">Material</span>
+      <span class="value" id="material">—</span>
+    </div>
+    <div class="stat">
+      <span class="label">Tool</span>
+      <span class="value" id="tool">—</span>
+    </div>
+    <div class="stat">
+      <span class="label">Speed</span>
+      <span class="value tnum" id="speed">—</span>
+    </div>
+    <div class="stat">
+      <span class="label">Flow</span>
+      <span class="value tnum" id="flow">—</span>
+    </div>
+    <div class="stat">
+      <span class="label">Z</span>
+      <span class="value tnum" id="zheight">—</span>
+    </div>
+    <div class="stat">
+      <span class="label">Fan · Hotend</span>
+      <span class="value tnum" id="fanhotend">—</span>
+    </div>
+    <div class="stat">
+      <span class="label">Swaps</span>
+      <span class="value tnum" id="swaps">—</span>
+    </div>
+    <div class="stat">
+      <span class="label">Waste</span>
+      <span class="value tnum" id="waste">—</span>
+    </div>
+  </div>
+
+  <div id="summary">
+    <div class="sumtile">
+      <span class="label">Result</span>
+      <span class="value accent" id="sum-result">Complete ✔</span>
+    </div>
+    <div class="sumtile">
+      <span class="label">Total time</span>
+      <span class="value tnum" id="sum-time">—</span>
+    </div>
+    <div class="sumtile">
+      <span class="label">Filament</span>
+      <span class="value tnum" id="sum-filament">—</span>
+    </div>
+    <div class="sumtile">
+      <span class="label">Swaps</span>
+      <span class="value tnum" id="sum-swaps">—</span>
+    </div>
+    <div class="sumtile">
+      <span class="label">Waste</span>
+      <span class="value tnum" id="sum-waste">—</span>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var POLL_MS = 1000;
+  var el = {
+    card: document.getElementById('card'),
+    thumb: document.getElementById('thumb'),
+    name: document.getElementById('name'),
+    stateline: document.getElementById('stateline-normal'),
+    fill: document.getElementById('fill'),
+    pct: document.getElementById('pct'),
+    filament: document.getElementById('filament'),
+    eta: document.getElementById('eta'),
+    temp: document.getElementById('temp'),
+    bed: document.getElementById('bed'),
+    material: document.getElementById('material'),
+    tool: document.getElementById('tool'),
+    speed: document.getElementById('speed'),
+    flow: document.getElementById('flow'),
+    zheight: document.getElementById('zheight'),
+    fanhotend: document.getElementById('fanhotend'),
+    swaps: document.getElementById('swaps'),
+    waste: document.getElementById('waste'),
+    sumTime: document.getElementById('sum-time'),
+    sumFilament: document.getElementById('sum-filament'),
+    sumSwaps: document.getElementById('sum-swaps'),
+    sumWaste: document.getElementById('sum-waste'),
+  };
+  var S = { data: null, syncedAt: 0, failures: 0, lastThumbKey: null, zHist: [], lastPrint: null };
+  var KNOWN = { PRINTING: 1, PAUSED: 1, FINISHED: 1, ERROR: 1, IDLE: 1 };
+
+  function setText(node, v) { if (node.textContent !== v) node.textContent = v; }
+
+  // Debug instrumentation — only active with ?diag=1 so normal use writes nothing.
+  var DIAG = location.search.indexOf('diag=1') !== -1;
+  function dbg(o) {
+    if (!DIAG) return;
+    try { o.t = Date.now(); fetch('/api/debug', { method: 'POST', body: JSON.stringify(o), keepalive: true }); } catch (e) {}
+  }
+
+  // "Gone to bed" mode: ?bed=true (also ?bed, ?bed=1, ?bed=yes) swaps the job name/state for an
+  // away message; the print stats stay visible. Optional ?bedmsg=... overrides the default text.
+  (function () {
+    var p = new URLSearchParams(location.search);
+    var v = p.get('bed');
+    var asleep = p.has('bed') && v !== 'false' && v !== '0' && v !== 'no';
+    if (!asleep) return;
+    el.card.classList.add('asleep');
+    document.getElementById('sleep-text').textContent = p.get('bedmsg') ||
+      "I've gone to bed. I won't see chat until I wake up, but I'll reply once I'm awake.";
+  })();
+
+  function fmtEta(s) {
+    if (s == null) return '—';
+    s = Math.max(0, Math.round(s));
+    var h = (s / 3600) | 0, m = ((s % 3600) / 60) | 0, sec = s % 60;
+    if (h) return h + 'h' + String(m).padStart(2, '0') + 'm';
+    return String(m).padStart(2, '0') + 'm' + String(sec).padStart(2, '0') + 's';
+  }
+
+  function remainingSec() {
+    var d = S.data;
+    if (!d || d.timeRemainingSec == null) return null;
+    // Freeze the countdown when paused or when the printer feed is stale/disconnected.
+    if (d.state !== 'PRINTING' || S.disconnected) return d.timeRemainingSec;
+    var elapsed = (performance.now() - S.syncedAt) / 1000;
+    return Math.max(0, d.timeRemainingSec - elapsed);
+  }
+
+  // Symmetric to remainingSec: climbs between polls while printing, frozen otherwise.
+  function elapsedSec() {
+    var d = S.data;
+    if (!d || d.timeElapsedSec == null) return null;
+    if (d.state !== 'PRINTING' || S.disconnected) return d.timeElapsedSec;
+    var since = (performance.now() - S.syncedAt) / 1000;
+    return d.timeElapsedSec + since;
+  }
+
+  function stateLabel(d) {
+    switch (d.state) {
+      case 'PRINTING': return 'Printing · ' + fmtEta(remainingSec()) + ' left';
+      case 'PAUSED':   return 'Paused' + (d.progress != null ? ' · ' + Math.floor(d.progress) + '%' : '');
+      case 'FINISHED': return 'Print complete ✔';
+      case 'IDLE':     return 'Printer idle';
+      case 'ERROR':    return 'Printer error';
+      default:         return d.state ? String(d.state).toLowerCase() : 'connecting…';
+    }
+  }
+
+  function render() {
+    var d = S.data;
+    if (!d) return;
+    var ageMs = performance.now() - S.syncedAt;
+    // Disconnected = either we can't reach our local server (actual fetch failures) OR the
+    // printer feed is stale (server-reported staleSec). Do NOT use elapsed-time-since-last-
+    // fetch: OBS throttles/suspends the browser source's timers when its scene isn't active,
+    // which pauses polling and would falsely read as "disconnected", firing the reconnect
+    // flash on every scene switch. Real fetch failures (S.failures) still catch a dead server.
+    var serverDown = S.failures >= 3;
+    var printerStale = d.staleSec != null && d.staleSec > 8;
+    var disconnected = serverDown || printerStale;
+    if (disconnected !== S.prevDisc) {
+      dbg({ ev: 'DISC', disconnected: disconnected, online: d.online, staleSec: d.staleSec, serverDown: serverDown, printerStale: printerStale, failures: S.failures });
+      S.prevDisc = disconnected;
+    }
+    S.disconnected = disconnected;
+
+    var st = KNOWN[d.state] ? d.state : 'UNKNOWN';
+    if (el.card.getAttribute('data-state') !== st) el.card.setAttribute('data-state', st);
+    el.card.classList.toggle('offline', disconnected);
+    el.card.classList.add('ready');
+
+    // Offline tag text: name the actual failure and roughly how long it's been out.
+    var tag = document.getElementById('offline-tag');
+    if (disconnected) {
+      var since = serverDown ? null : d.staleSec;
+      tag.textContent = (serverDown ? 'Overlay server offline' : 'Printer disconnected') +
+        (since != null && since >= 5 ? ' · ' + fmtEta(since) : '');
+    }
+
+    setText(el.name, d.name || (st === 'IDLE' ? 'No active print' : '—'));
+    setText(el.stateline, stateLabel(d));
+
+    // Thumbnail: only (re)load when the job changes.
+    if (d.thumbnailUrl && d.thumbnailKey && d.thumbnailKey !== S.lastThumbKey) {
+      S.lastThumbKey = d.thumbnailKey;
+      el.thumb.onerror = function () { el.thumb.classList.add('hidden'); };
+      el.thumb.onload = function () { el.thumb.classList.remove('hidden'); };
+      el.thumb.src = d.thumbnailUrl + '?j=' + encodeURIComponent(d.thumbnailKey);
+    } else if (!d.thumbnailUrl) {
+      el.thumb.classList.add('hidden');
+    }
+
+    // Progress
+    var pct = d.progress != null ? Math.min(100, Math.max(0, d.progress)) : 0;
+    el.fill.style.width = pct + '%';
+    setText(el.pct, (d.progress != null ? Math.floor(pct) : 0) + '%');
+    setText(el.filament, d.filamentG != null ? d.filamentG + ' g' : '');
+    // Time readout: elapsed / remaining while printing (climbs / counts down), else just remaining.
+    var ela = elapsedSec();
+    if (ela != null && d.state === 'PRINTING') {
+      // Label elapsed so it doesn't read as ambiguous next to remaining near the halfway point.
+      setText(el.eta, 'elapsed ' + fmtEta(ela) + ' / ' + fmtEta(remainingSec()));
+    } else setText(el.eta, fmtEta(remainingSec()));
+
+    // Nozzle temp — show →target only when off by >3° (avoid PID flicker)
+    if (d.nozzleTemp != null) {
+      var t = Math.round(d.nozzleTemp);
+      if (d.nozzleTarget != null && Math.abs(d.nozzleTemp - d.nozzleTarget) > 3) {
+        el.temp.innerHTML = t + '°<span class="sub"> →' + Math.round(d.nozzleTarget) + '°</span>';
+      } else {
+        el.temp.textContent = t + '°';
+      }
+    } else setText(el.temp, '—');
+
+    // Bed temp — same →target treatment as the nozzle.
+    if (d.bedTemp != null) {
+      var bt = Math.round(d.bedTemp);
+      if (d.bedTarget != null && Math.abs(d.bedTemp - d.bedTarget) > 3) {
+        el.bed.innerHTML = bt + '°<span class="sub"> →' + Math.round(d.bedTarget) + '°</span>';
+      } else {
+        el.bed.textContent = bt + '°';
+      }
+    } else setText(el.bed, '—');
+
+    // Current material for the active tool.
+    setText(el.material, d.material || (d.analyzing ? '…' : '—'));
+
+    // Current tool — displayed 1-based (T0 in gcode => "T1" on the printer's UI).
+    // Note 0 is a valid tool index (== null, not falsy!). Mid-swap the badge pulses.
+    if (d.toolLabel != null) {
+      var cls = d.swapping ? 'badge swapping' : 'badge';
+      // Mid-swap show which tool is being loaded ("T6 → T2"); fall back to ⇄ if we don't know it.
+      var arrow = (d.swapping && d.swappingToLabel != null) ? ' → T' + d.swappingToLabel
+                : (d.swapping ? ' ⇄' : '');
+      el.tool.innerHTML = '<span class="' + cls + '">T' + d.toolLabel + arrow + '</span>';
+    } else if (d.state === 'PRINTING' && d.swapping) {
+      el.tool.innerHTML = '<span class="badge swapping">swapping…</span>';
+    } else setText(el.tool, '—');
+
+    // Speed / flow overrides — percentages straight off the printer.
+    setText(el.speed, d.speed != null ? Math.round(d.speed) + '%' : '—');
+    setText(el.flow, d.flow != null ? Math.round(d.flow) + '%' : '—');
+
+    // Live Z height, mm. Z-hops and telemetry noise make the raw value churn, so show the
+    // minimum of the last few readings (the true layer Z; hops only spike upward) at 0.1mm.
+    if (d.axisZ != null) {
+      var z = S.zHist.length ? Math.min.apply(null, S.zHist) : d.axisZ;
+      el.zheight.innerHTML = z.toFixed(1) + '<span class="sub"> mm</span>';
+    } else setText(el.zheight, '—');
+
+    // Hotend fan, RPM.
+    if (d.fanHotend != null) el.fanhotend.innerHTML = Math.round(d.fanHotend) + '<span class="sub"> rpm</span>';
+    else setText(el.fanhotend, '—');
+
+    // Swaps done / total
+    if (d.swapsTotal != null) {
+      setText(el.swaps, (d.swapsDone != null ? d.swapsDone : '…') + '/' + d.swapsTotal);
+    } else setText(el.swaps, d.analyzing ? '…' : '—');
+
+    // Estimated filament waste (purge) done / total, grams
+    if (d.wasteTotal != null) {
+      var wd = d.wasteDone != null ? d.wasteDone.toFixed(1) : '…';
+      setText(el.waste, wd + '/' + Math.round(d.wasteTotal) + 'g');
+    } else setText(el.waste, d.analyzing ? '…' : '—');
+
+    // While printing, keep a snapshot of the final figures. The server clears the bgcode
+    // analysis the moment a job ends, so this is the only way the FINISHED summary can show
+    // swaps/waste (time + filament also come from here as a fallback).
+    if (d.state === 'PRINTING' || d.state === 'PAUSED') {
+      S.lastPrint = {
+        elapsed: d.timeElapsedSec,
+        filamentG: d.filamentG,
+        swaps: d.swapsTotal != null ? d.swapsTotal : d.swapsDone,
+        waste: d.wasteTotal != null ? d.wasteTotal : d.wasteDone,
+      };
+    }
+    // Completion summary (shown by CSS only when state=FINISHED). Prefer the finished frame's
+    // own time/filament, fall back to the last printing snapshot for everything.
+    if (d.state === 'FINISHED') {
+      var lp = S.lastPrint || {};
+      var tt = d.timeElapsedSec != null ? d.timeElapsedSec : lp.elapsed;
+      setText(el.sumTime, tt != null ? fmtEta(tt) : '—');
+      var fil = d.filamentG != null ? d.filamentG : lp.filamentG;
+      setText(el.sumFilament, fil != null ? fil + ' g' : '—');
+      var sw = lp.swaps != null ? lp.swaps : d.swapsTotal;
+      setText(el.sumSwaps, sw != null ? String(sw) : '—');
+      var wst = lp.waste != null ? lp.waste : d.wasteTotal;
+      setText(el.sumWaste, wst != null ? Math.round(wst) + ' g' : '—');
+    }
+  }
+
+  function poll() {
+    var ctrl = new AbortController();
+    var to = setTimeout(function () { ctrl.abort(); }, 900);
+    fetch('/api/state', { cache: 'no-store', signal: ctrl.signal })
+      .then(function (r) { if (!r.ok) throw 0; return r.json(); })
+      .then(function (j) { S.data = j; S.syncedAt = performance.now(); S.failures = 0;
+        // Smoothing buffer for Z: keep the last few readings so render can reject z-hop spikes.
+        if (j.axisZ != null) { S.zHist.push(j.axisZ); if (S.zHist.length > 4) S.zHist.shift(); }
+        dbg({ ev: 'poll', online: j.online, staleSec: j.staleSec }); })
+      .catch(function () { S.failures++; dbg({ ev: 'pollERR', failures: S.failures }); })
+      .finally(function () { clearTimeout(to); render(); setTimeout(poll, POLL_MS); });
+  }
+
+  setInterval(render, 1000);                 // smooth countdown between polls
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) poll();            // resync instantly on OBS scene activation
+  });
+  poll();
+})();
+</script>
