@@ -287,6 +287,18 @@
   var S = { data: null, syncedAt: 0, failures: 0, lastThumbKey: null, zHist: [], lastPrint: null };
   var KNOWN = { PRINTING: 1, PAUSED: 1, FINISHED: 1, ERROR: 1, IDLE: 1 };
 
+  // Brand + colour loaded in each INDX slot, keyed by the printer-UI tool label (1-based,
+  // matching d.toolLabel). Used to enrich the generic material readout (e.g. "PETG") with
+  // what's actually spooled. Empty slots (T3/T4) fall through to the raw d.material.
+  var FILAMENTS = {
+    1: 'Prusament Galaxy Black PETG',
+    2: 'FlashForge PETG Black',
+    5: 'Prusament Pistachio Green PETG',
+    6: 'Prusament PETG Chalky Blue',
+    7: 'Prusament Urbanite Gray PETG',
+    8: 'Prusament Shimmering Violet PETG',
+  };
+
   function setText(node, v) { if (node.textContent !== v) node.textContent = v; }
 
   // Debug instrumentation — only active with ?diag=1 so normal use writes nothing.
@@ -421,8 +433,11 @@
       }
     } else setText(el.bed, '—');
 
-    // Current material for the active tool.
-    setText(el.material, d.material || (d.analyzing ? '…' : '—'));
+    // Current material for the active tool. When we know the loaded material, prefer the
+    // specific brand + colour spooled in the active slot (FILAMENTS), falling back to the
+    // raw material string for slots we haven't mapped.
+    var mat = d.material ? (FILAMENTS[d.toolLabel] || d.material) : (d.analyzing ? '…' : '—');
+    setText(el.material, mat);
 
     // Current tool — displayed 1-based (T0 in gcode => "T1" on the printer's UI).
     // Note 0 is a valid tool index (== null, not falsy!). Mid-swap the badge pulses.
