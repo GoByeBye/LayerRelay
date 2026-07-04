@@ -5,7 +5,11 @@ const fs = require('fs');
 const { decodeGcodeText, decodeMetadata } = require('./bgcode.js');
 const { buildTimeline, mapLive } = require('./toolswaps.js');
 
-const path = process.argv[2] || 'C:/msys64/tmp/current.bgcode';
+const path = process.argv[2];
+if (!path) {
+  console.error('usage: node test-decode.js <path-to.bgcode>');
+  process.exit(1);
+}
 const buf = fs.readFileSync(path);
 console.log(`file: ${path}  (${buf.length} bytes)`);
 

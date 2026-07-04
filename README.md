@@ -17,7 +17,7 @@ npm install
 npm start
 ```
 
-Then open **http://localhost:8787/** — that's the overlay.
+Then open **http://localhost:8787/**; that's the overlay.
 
 `config.json`:
 ```json
@@ -36,7 +36,7 @@ Then open **http://localhost:8787/** — that's the overlay.
 1. Add a **Browser** source.
 2. URL: `http://localhost:8787/`
 3. Width **400**, Height **230** (the card sits in the top-left with a 16px margin).
-4. The page background is transparent — it composites straight over your video.
+4. The page background is transparent, so it composites straight over your video.
 5. Recommended: tick **"Refresh browser when scene becomes active"** for easy recovery.
 
 ## How it works
@@ -71,16 +71,16 @@ Then open **http://localhost:8787/** — that's the overlay.
 ## Notes
 
 - **Local bgcode fallback:** PrusaLink sometimes won't serve a print's file over HTTP (it can
-  report `size: 0` with a dead download ref — e.g. right after an upload/reboot, or for files it
+  report `size: 0` with a dead download ref, e.g. right after an upload/reboot, or for files it
   hasn't re-indexed). Drop a copy of the `.bgcode` (same filename as the print) into any folder
   listed in `config.json` → `localBgcodeDirs`, and the server analyzes that instead. Analysis
   order per job is: disk cache → local file → printer download. You can grab a copy from the
   PrusaConnect API / your slicer output.
 - The first analysis of a new print downloads the whole `.bgcode` from the printer, which is
-  **slow while a print is running** (the printer reads it off USB) — up to a couple of minutes.
+  **slow while a print is running** (the printer reads it off USB), up to a couple of minutes.
   During that window `swapsTotal`/`currentTool` are `null` and the overlay shows "analyzing…".
   The result is cached to `cache/` keyed by job, so a server restart mid-print is instant.
-- Tools: the G-code is 0-based (`T0`–`T7`); the overlay shows them 1-based (`T1`–`T8`) to match
+- Tools: the G-code is 0-based (`T0`-`T7`); the overlay shows them 1-based (`T1`-`T8`) to match
   the printer UI. `currentTool` in the API stays 0-based (used to index `material`); `toolLabel` is
   the 1-based display value.
 - Material per tool comes from the bgcode `filament_type` metadata (0-indexed by tool).
@@ -99,13 +99,13 @@ Then open **http://localhost:8787/** — that's the overlay.
 
 PrusaLink runs on the printer's resource-constrained Buddy board and can become **temporarily
 unresponsive during heavy prints** (lots of tool changes / motion). This does **not** stop the
-print — only the web API pauses. The overlay handles it:
+print; only the web API pauses. The overlay handles it:
 
 - The server polls without overlapping requests and backs off while the printer is unreachable.
 - When the feed goes stale (`online:false` / `staleSec` climbs), the overlay **grays out and dims
   the last-known data (kept visible, not hidden)** and shows a red "Printer disconnected · mm:ss"
   banner. The countdown freezes.
-- It **auto-recovers** the moment the printer answers again — no restart needed.
+- It **auto-recovers** the moment the printer answers again, no restart needed.
 - The last-good frame is persisted to `cache/laststate.json`, so restarting the server while the
   printer is down still shows the (grayed) last frame instead of an empty card.
 
