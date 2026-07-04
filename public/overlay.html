@@ -1,6 +1,6 @@
 <!--
   OBS browser-source overlay for a Prusa CORE One + INDX toolchanger.
-  Full-width bottom banner sized for a 1920x150 OBS browser source (it fills the source
+  Full-width top banner sized for a 1920x150 OBS browser source (it fills the source
   exactly via 100vh/100vw). Two bands: top = thumbnail + job title/bed-message + progress;
   bottom = all print stats in one even 10-column row. Transparent page, only the banner shows.
   Enable "Refresh browser when scene becomes active" for a cheap manual recovery.
@@ -11,7 +11,7 @@
 <style>
   :root {
     --accent: #fa6831;
-    --card-bg: rgba(12, 14, 18, 0.7);
+    --card-bg: rgba(12, 14, 18, 0.9);
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
@@ -24,12 +24,12 @@
 
   #card {
     position: fixed;
-    left: 0; right: 0; bottom: 0;
+    left: 0; right: 0; top: 0;
     width: 100vw; height: 100vh;          /* fill the OBS source (sized 1920x150) exactly */
     display: flex; flex-direction: column; justify-content: center; gap: 12px;
     background: var(--card-bg);
-    border-top: 6px solid var(--accent);
-    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.45);
+    border-bottom: 6px solid var(--accent);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
     padding: 16px 34px;
@@ -125,7 +125,7 @@
 
   /* === Bottom band: every stat in ONE even row (no wrap) =================== */
   #stats {
-    display: grid; grid-template-columns: repeat(10, 1fr);
+    display: grid; grid-template-columns: repeat(11, 1fr);
     align-items: end; column-gap: 16px;
     border-top: 1px solid rgba(255, 255, 255, 0.10);
     padding-top: 10px;
@@ -140,6 +140,9 @@
     font-size: 24px; font-weight: 600; color: #fff;
     overflow: hidden; text-overflow: ellipsis;
   }
+  /* Material holds a long filament name; give it 2 tracks + smaller face so it fits one line. */
+  .stat.wide { grid-column: span 2; }
+  .stat.wide .value { font-size: 16px; }
   .sub { color: rgba(255,255,255,0.5); font-weight: 400; }
   .badge {
     display: inline-block; padding: 1px 12px; border-radius: 999px;
@@ -199,7 +202,7 @@
       <span class="label">Bed</span>
       <span class="value tnum" id="bed">—</span>
     </div>
-    <div class="stat">
+    <div class="stat wide">
       <span class="label">Material</span>
       <span class="value" id="material">—</span>
     </div>
@@ -228,7 +231,7 @@
       <span class="value tnum" id="swaps">—</span>
     </div>
     <div class="stat">
-      <span class="label">Waste</span>
+      <span class="label">Waste of total</span>
       <span class="value tnum" id="waste">—</span>
     </div>
   </div>
@@ -287,9 +290,21 @@
   var S = { data: null, syncedAt: 0, failures: 0, lastThumbKey: null, zHist: [], lastPrint: null };
   var KNOWN = { PRINTING: 1, PAUSED: 1, FINISHED: 1, ERROR: 1, IDLE: 1 };
 
+  // Brand + colour loaded in each INDX slot, keyed by the printer-UI tool label (1-based,
+  // matching d.toolLabel). Used to enrich the generic material readout (e.g. "PETG") with
+  // what's actually spooled. Empty slots (T3/T4) fall through to the raw d.material.
+  var FILAMENTS = {
+    1: 'Prusament Galaxy Black PETG',
+    2: 'FlashForge PETG Black',
+    5: 'Prusament Pistachio Green PETG',
+    6: 'Prusament PETG Chalky Blue',
+    7: 'Prusament Urbanite Gray PETG',
+    8: 'Prusament Shimmering Violet PETG',
+  };
+
   function setText(node, v) { if (node.textContent !== v) node.textContent = v; }
 
-  // Debug instrumentation — only active with ?diag=1 so normal use writes nothing.
+  // Debug instrumentation, only active with ?diag=1 so normal use writes nothing.
   var DIAG = location.search.indexOf('diag=1') !== -1;
   function dbg(o) {
     if (!DIAG) return;
@@ -345,10 +360,21 @@
     }
   }
 
+  // Temp readout: show "→target" only when off by more than 3° (avoids PID flicker).
+  function tempCell(node, temp, target) {
+    if (temp == null) { setText(node, '—'); return; }
+    var t = Math.round(temp);
+    if (target != null && Math.abs(temp - target) > 3) {
+      node.innerHTML = t + '°<span class="sub"> →' + Math.round(target) + '°</span>';
+    } else setText(node, t + '°');
+  }
+
+  // Percent: whole number at 10%+, one decimal below, so small shares stay readable.
+  function fmtPct(n) { return (n >= 10 ? Math.round(n) : n.toFixed(1)) + '%'; }
+
   function render() {
     var d = S.data;
     if (!d) return;
-    var ageMs = performance.now() - S.syncedAt;
     // Disconnected = either we can't reach our local server (actual fetch failures) OR the
     // printer feed is stale (server-reported staleSec). Do NOT use elapsed-time-since-last-
     // fetch: OBS throttles/suspends the browser source's timers when its scene isn't active,
@@ -401,42 +427,26 @@
       setText(el.eta, 'elapsed ' + fmtEta(ela) + ' / ' + fmtEta(remainingSec()));
     } else setText(el.eta, fmtEta(remainingSec()));
 
-    // Nozzle temp — show →target only when off by >3° (avoid PID flicker)
-    if (d.nozzleTemp != null) {
-      var t = Math.round(d.nozzleTemp);
-      if (d.nozzleTarget != null && Math.abs(d.nozzleTemp - d.nozzleTarget) > 3) {
-        el.temp.innerHTML = t + '°<span class="sub"> →' + Math.round(d.nozzleTarget) + '°</span>';
-      } else {
-        el.temp.textContent = t + '°';
-      }
-    } else setText(el.temp, '—');
+    tempCell(el.temp, d.nozzleTemp, d.nozzleTarget);
+    tempCell(el.bed, d.bedTemp, d.bedTarget);
 
-    // Bed temp — same →target treatment as the nozzle.
-    if (d.bedTemp != null) {
-      var bt = Math.round(d.bedTemp);
-      if (d.bedTarget != null && Math.abs(d.bedTemp - d.bedTarget) > 3) {
-        el.bed.innerHTML = bt + '°<span class="sub"> →' + Math.round(d.bedTarget) + '°</span>';
-      } else {
-        el.bed.textContent = bt + '°';
-      }
-    } else setText(el.bed, '—');
+    // Current material for the active tool. When we know the loaded material, prefer the
+    // specific brand + colour spooled in the active slot (FILAMENTS), falling back to the
+    // raw material string for slots we haven't mapped.
+    var mat = d.material ? (FILAMENTS[d.toolLabel] || d.material) : (d.analyzing ? '…' : '—');
+    setText(el.material, mat);
 
-    // Current material for the active tool.
-    setText(el.material, d.material || (d.analyzing ? '…' : '—'));
-
-    // Current tool — displayed 1-based (T0 in gcode => "T1" on the printer's UI).
+    // Current tool, displayed 1-based (T0 in gcode => "T1" on the printer's UI).
     // Note 0 is a valid tool index (== null, not falsy!). Mid-swap the badge pulses.
     if (d.toolLabel != null) {
       var cls = d.swapping ? 'badge swapping' : 'badge';
-      // Mid-swap show which tool is being loaded ("T6 → T2"); fall back to ⇄ if we don't know it.
-      var arrow = (d.swapping && d.swappingToLabel != null) ? ' → T' + d.swappingToLabel
-                : (d.swapping ? ' ⇄' : '');
+      var arrow = d.swapping ? ' ⇄' : '';
       el.tool.innerHTML = '<span class="' + cls + '">T' + d.toolLabel + arrow + '</span>';
     } else if (d.state === 'PRINTING' && d.swapping) {
       el.tool.innerHTML = '<span class="badge swapping">swapping…</span>';
     } else setText(el.tool, '—');
 
-    // Speed / flow overrides — percentages straight off the printer.
+    // Speed / flow overrides, percentages straight off the printer.
     setText(el.speed, d.speed != null ? Math.round(d.speed) + '%' : '—');
     setText(el.flow, d.flow != null ? Math.round(d.flow) + '%' : '—');
 
@@ -456,8 +466,13 @@
       setText(el.swaps, (d.swapsDone != null ? d.swapsDone : '…') + '/' + d.swapsTotal);
     } else setText(el.swaps, d.analyzing ? '…' : '—');
 
-    // Estimated filament waste (purge) done / total, grams
-    if (d.wasteTotal != null) {
+    // Filament waste (purge) as a share of the total extruded filament: headline % + the
+    // raw "waste / total" grams beneath it, so viewers see how costly the multicolor swaps are.
+    if (d.wasteTotal != null && d.filamentG != null && d.filamentG > 0) {
+      var wg = d.wasteDone != null ? d.wasteDone : d.wasteTotal;   // live so far, else job total
+      el.waste.innerHTML = fmtPct(wg / d.filamentG * 100) +
+        '<span class="sub"> ' + wg.toFixed(1) + '/' + Math.round(d.filamentG) + 'g</span>';
+    } else if (d.wasteTotal != null) {
       var wd = d.wasteDone != null ? d.wasteDone.toFixed(1) : '…';
       setText(el.waste, wd + '/' + Math.round(d.wasteTotal) + 'g');
     } else setText(el.waste, d.analyzing ? '…' : '—');
@@ -484,7 +499,11 @@
       var sw = lp.swaps != null ? lp.swaps : d.swapsTotal;
       setText(el.sumSwaps, sw != null ? String(sw) : '—');
       var wst = lp.waste != null ? lp.waste : d.wasteTotal;
-      setText(el.sumWaste, wst != null ? Math.round(wst) + ' g' : '—');
+      if (wst != null) {
+        var sp = (fil != null && fil > 0) ? wst / fil * 100 : null;
+        var spStr = sp != null ? ' (' + fmtPct(sp) + ' of total)' : '';
+        setText(el.sumWaste, Math.round(wst) + ' g' + spStr);
+      } else setText(el.sumWaste, '—');
     }
   }
 

@@ -50,19 +50,20 @@ const cleanName = (displayName) => {
 };
 
 const jobKeyOf = (jobId, fileName) => `${jobId || 'x'}::${fileName || ''}`;
+const round1 = (x) => (x != null ? Math.round(x * 10) / 10 : null); // grams, to 0.1
 
 // Physical toolchange tracking. An INDX swap physically pulls the hot tool and docks a cold one, so
-// the active nozzle reading CRATERS — measured live it plunges from 255° to 0–15° and ramps back to
+// the active nozzle reading CRATERS - measured live it plunges from 255° to 0-15° and ramps back to
 // temp over ~7s. Crucially the *target* also drops to 0 mid-swap, so we must NOT measure the dip
 // relative to the live target (it's meaningless at 0). We remember the last real print temp
 // (`lastTarget`) and detect the crater against that absolute value.
 //   armed=true  -> nozzle at print temp, tool in use.
 //   crater (temp < lastTarget-60) while armed   -> swap started: disarm, swapping=true.
 //   reheat (temp >= lastTarget-15) while disarmed -> swap done: rearm, swapping=false, confirmed++.
-// `confirmed` is the count of COMPLETED swaps — i.e. the current index into the gcode tool sequence.
+// `confirmed` is the count of COMPLETED swaps, i.e. the current index into the gcode tool sequence.
 // It is seeded once (see poll) from the restored/progress estimate, then dips carry it forward.
 // Reset per job. (Between two real swaps the nozzle must return to print temp to extrude, so the
-// re-arm always triggers — the ~20s of steady 255° seen between craters guarantees no merged count.)
+// re-arm always triggers - the ~20s of steady 255° seen between craters guarantees no merged count.)
 let swapTrack = { jobKey: null, confirmed: 0, armed: false, swapping: false, lastTarget: 0, seeded: false };
 
 function trackSwaps(jobKey, p, printerState) {
@@ -94,7 +95,7 @@ function findLocalBgcode(file) {
   for (const dir of cfg.localBgcodeDirs || []) {
     for (const n of names) {
       const p = path.join(dir, n);
-      try { if (fs.existsSync(p)) return p; } catch {}
+      if (fs.existsSync(p)) return p;
     }
   }
   return null;
@@ -131,7 +132,7 @@ async function ensureAnalysis(jobKey, file) {
       finishAnalysis(analyzeBgcode(fs.readFileSync(local)), jobKey, cacheFile, 'local');
       return;
     }
-    // 3. Download from the printer — only if it actually offers the file.
+    // 3. Download from the printer, only if it actually offers the file.
     const canDownload = file && file.refs && file.refs.download && file.size !== 0;
     if (!canDownload) return; // nothing available yet; try again next poll (cheap, no network)
     if (jobKey === analysisFailedKey && Date.now() < analysisRetryAt) return; // backoff
@@ -182,10 +183,11 @@ async function poll() {
     // "swapping…" badge (the nozzle-temp crater reliably marks a swap in progress).
     let currentTool = null, swapsDone = null, swapsTotal = null, material = null;
     let wasteDone = null, wasteTotal = null;
-    const livePct = sjob && sjob.progress != null ? sjob.progress : null;
-    const liveRemMin = sjob && sjob.time_remaining != null ? sjob.time_remaining / 60 : null;
+    const livePct = sjob?.progress ?? null;
+    const liveRemMin = sjob?.time_remaining != null ? sjob.time_remaining / 60 : null;
+    const haveAnalysis = analysis && analysis.jobKey === jobKey;
     const track = trackSwaps(jobKey, p, printerState); // for the swapping indicator only
-    if (analysis && analysis.jobKey === jobKey && livePct != null) {
+    if (haveAnalysis && livePct != null) {
       const m = mapLive(analysis, livePct, liveRemMin);
       currentTool = m.currentTool;
       swapsDone = m.swapsDone;
@@ -193,16 +195,12 @@ async function poll() {
       wasteDone = m.wasteDone;
       wasteTotal = m.wasteTotal;
       material = materialFor(analysis, currentTool);
-    } else if (analysis && analysis.jobKey === jobKey) {
+    } else if (haveAnalysis) {
       swapsTotal = analysis.totalSwaps;
       wasteTotal = analysis.totalWasteG;
     }
     // Printer/UI labels tools starting at 1, while the G-code (and our index) is 0-based.
     const toolLabel = currentTool != null ? currentTool + 1 : null;
-
-    // True for the whole dip→reheat window of an INDX toolchange (see trackSwaps), so the overlay
-    // shows "swapping…" until the new tool is actually up to temp and in use.
-    const swapping = track.swapping;
 
     state = {
       state: printerState,
@@ -210,28 +208,29 @@ async function poll() {
       thumbnailUrl: file && file.refs && file.refs.thumbnail ? '/api/thumbnail' : null,
       thumbnailKey: jobKey,
       progress: livePct,
-      timeRemainingSec: sjob && sjob.time_remaining != null ? sjob.time_remaining : null,
-      timeElapsedSec: sjob && sjob.time_printing != null ? sjob.time_printing : null,
-      nozzleTemp: p.temp_nozzle != null ? p.temp_nozzle : null,
-      nozzleTarget: p.target_nozzle != null ? p.target_nozzle : null,
-      bedTemp: p.temp_bed != null ? p.temp_bed : null,
-      bedTarget: p.target_bed != null ? p.target_bed : null,
-      speed: p.speed != null ? p.speed : null,       // print speed override, %
-      flow: p.flow != null ? p.flow : null,          // flow rate override, %
-      axisZ: p.axis_z != null ? p.axis_z : null,     // current Z height, mm
-      fanHotend: p.fan_hotend != null ? p.fan_hotend : null, // hotend/heatbreak fan, RPM
-      fanPrint: p.fan_print != null ? p.fan_print : null,    // part-cooling fan, RPM
+      timeRemainingSec: sjob?.time_remaining ?? null,
+      timeElapsedSec: sjob?.time_printing ?? null,
+      nozzleTemp: p.temp_nozzle ?? null,
+      nozzleTarget: p.target_nozzle ?? null,
+      bedTemp: p.temp_bed ?? null,
+      bedTarget: p.target_bed ?? null,
+      speed: p.speed ?? null,         // print speed override, %
+      flow: p.flow ?? null,           // flow rate override, %
+      axisZ: p.axis_z ?? null,        // current Z height, mm
+      fanHotend: p.fan_hotend ?? null, // hotend/heatbreak fan, RPM
+      fanPrint: p.fan_print ?? null,   // part-cooling fan, RPM
       currentTool,
       toolLabel,
       material,
       swapsDone,              // swaps completed so far (from progress %), index into tool sequence
       swapsTotal,
-      wasteDone: wasteDone != null ? Math.round(wasteDone * 10) / 10 : null,
-      wasteTotal: wasteTotal != null ? Math.round(wasteTotal * 10) / 10 : null,
-      filamentG: analysis && analysis.jobKey === jobKey && analysis.totalFilamentG != null
-        ? Math.round(analysis.totalFilamentG) : null,
-      swapping,
-      analyzing: analyzing && !(analysis && analysis.jobKey === jobKey),
+      wasteDone: round1(wasteDone),
+      wasteTotal: round1(wasteTotal),
+      filamentG: haveAnalysis && analysis.totalFilamentG != null ? Math.round(analysis.totalFilamentG) : null,
+      // True for the whole dip->reheat window of an INDX toolchange (see trackSwaps), so the overlay
+      // shows "swapping…" until the new tool is actually up to temp and in use.
+      swapping: track.swapping,
+      analyzing: analyzing && !haveAnalysis,
       updatedAt: Math.floor(Date.now() / 1000),
     };
 
@@ -309,8 +308,8 @@ function mergeConnect(base) {
     const m = mapLive(analysis, c.progress, c.timeRemainingSec != null ? c.timeRemainingSec / 60 : null);
     out.swapsDone = m.swapsDone;
     out.swapsTotal = m.swapsTotal;
-    out.wasteDone = m.wasteDone != null ? Math.round(m.wasteDone * 10) / 10 : null;
-    out.wasteTotal = m.wasteTotal != null ? Math.round(m.wasteTotal * 10) / 10 : null;
+    out.wasteDone = round1(m.wasteDone);
+    out.wasteTotal = round1(m.wasteTotal);
   }
   return { out, online: connectOnline, lastGood: connectLastGoodAt };
 }

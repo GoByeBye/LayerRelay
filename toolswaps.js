@@ -19,7 +19,7 @@ function buildTimeline(gcodeText) {
   const timeline = [];
   const toolsSeen = new Set();
   // Waste = filament purged during toolchanges. PrusaSlicer marks it with ;FLUSH_START/END
-  // (the color flush) and ;EXCLUDE_E_START/END (the tool-load prime) — sum the E in those.
+  // (the color flush) and ;EXCLUDE_E_START/END (the tool-load prime); sum the E in those.
   let wasteMm = 0, inFlush = false, inExcl = false;
 
   const lines = gcodeText.split('\n');
@@ -77,23 +77,6 @@ function buildTimeline(gcodeText) {
   };
 }
 
-// Tool/swap/waste state after exactly k completed toolchanges (k = index into the tool sequence).
-// This is the authoritative lookup: k comes from counting physical swaps (nozzle temp craters),
-// and the gcode timeline says which tool each swap goes to. k=0 => the initial tool, before any swap.
-function toolAt(analysis, k) {
-  const tl = analysis.timeline;
-  const total = analysis.totalSwaps;
-  k = Math.max(0, Math.min(k, total));
-  const wasteTotal = analysis.totalWasteG != null ? analysis.totalWasteG : null;
-  if (k === 0 || !tl.length) {
-    return { currentTool: analysis.initialTool, swapsDone: 0, swapsTotal: total, wasteDone: 0, wasteTotal };
-  }
-  const e = tl[k - 1];                 // the swap that put us on the current tool
-  const gPerMm = analysis.gPerMm || 0;
-  const wasteDone = e.cumulativeWasteMm != null ? e.cumulativeWasteMm * gPerMm : null;
-  return { currentTool: e.toolIndex, swapsDone: e.cumulativeSwaps, swapsTotal: total, wasteDone, wasteTotal };
-}
-
 // Coarse progress-based estimate of the swap index. Only ~usable to a resolution of however many
 // swaps share one integer progress percent (for a 1000-swap print that's ~10 swaps), so it is used
 // ONLY to seed / sanity-anchor the physical dip count, never as the live tool source.
@@ -111,7 +94,7 @@ function mapLive(analysis, livePct, liveRemMin) {
     else hi = mid - 1;
   }
 
-  const wasteTotal = analysis.totalWasteG != null ? analysis.totalWasteG : null;
+  const wasteTotal = analysis.totalWasteG ?? null;
   if (idx < 0) return { currentTool: analysis.initialTool, swapsDone: 0, swapsTotal, wasteDone: 0, wasteTotal };
 
   // Resolution fix: several swaps can share one integer percent. Among events at the
@@ -150,7 +133,6 @@ function analyzeBgcode(fileBuf) {
   const a = buildTimeline(decodeGcodeText(fileBuf));
   const meta = decodeMetadata(fileBuf);
   a.materials = parseMaterials(meta);       // 0-indexed by tool
-  a.printerModel = meta.printer_model || null;
   // Waste in grams from the purge length + filament geometry (defaults: 1.75mm, 1.27 g/cm3).
   a.gPerMm = gramsPerMm(firstNum(meta.filament_diameter, 1.75), firstNum(meta.filament_density, 1.27));
   a.totalWasteG = (a.totalWasteMm || 0) * a.gPerMm;
@@ -166,4 +148,4 @@ function materialFor(analysis, toolIndex) {
   return analysis.materials[toolIndex] || null;
 }
 
-module.exports = { buildTimeline, mapLive, toolAt, analyzeBgcode, materialFor, ANALYSIS_VERSION };
+module.exports = { buildTimeline, mapLive, analyzeBgcode, materialFor, ANALYSIS_VERSION };

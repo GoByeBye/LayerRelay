@@ -221,4 +221,4 @@ function decodeMetadata(fileBuf) {
   return meta;
 }
 
-module.exports = { decodeGcodeText, decodeMetadata, iterBlocks, heatshrinkDecode, meatpackUnbinarize };
+module.exports = { decodeGcodeText, decodeMetadata };

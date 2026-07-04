@@ -5,7 +5,7 @@
 // Auth is the Prusa *account* OAuth2 access token (OIDC, account.prusa3d.com). Access tokens
 // last ~2h; we keep one alive by exchanging a long-lived refresh token at the token endpoint.
 // Django-OAuth-Toolkit ROTATES the refresh token on every use, so each new one is persisted to
-// disk — otherwise the stored token dies after the first refresh.
+// disk, otherwise the stored token dies after the first refresh.
 const https = require('https');
 const fs = require('fs');
 
@@ -137,4 +137,4 @@ function mapConnectToState(j, cleanName) {
   };
 }
 
-module.exports = { ConnectAuth, fetchPrinter, mapConnectToState, DEFAULT_CLIENT_ID };
+module.exports = { ConnectAuth, fetchPrinter, mapConnectToState };
