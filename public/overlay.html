@@ -160,14 +160,20 @@
   #waste .sub { font-size: 16px; }
 
   /* Tool: a mini front view of the INDX dock plate (8 hanging tools, numbered like the
-     printer) instead of a text badge. The chip is the plate; the active dock lights up in
-     the accent colour and pulses mid-swap; each tube is tinted with the loaded filament. */
+     printer) instead of a text badge. The chip is the plate; the active dock gets an
+     accent ring and its toolhead takes the colour of the filament it is printing (--slot,
+     set per dock by the builder; accent fallback for unmapped slots). Pulses mid-swap;
+     each tube is tinted with the loaded filament. */
   #tool { padding: 1px 8px; }             /* 29px panel + padding + border = 33px, same as text chips */
   #tool svg { display: block; width: 100%; height: 29px; }
   #tool .glow { opacity: 0; transition: opacity 0.3s ease; }
   #tool .dock.active .glow { opacity: 1; }
   #tool .body { fill: rgba(255, 255, 255, 0.55); }
-  #tool .dock.active .body { fill: var(--accent); }
+  #tool .dock.active .body {
+    fill: var(--slot, var(--accent));
+    /* faint edge so near-black filaments still read as a toolhead on the dark chip */
+    stroke: rgba(255, 255, 255, 0.45); stroke-width: 0.75;
+  }
   #tool .num {
     fill: rgba(255, 255, 255, 0.65);
     font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
@@ -332,7 +338,8 @@
     8: 'Prusament Shimmering Violet PETG',
   };
   // On-screen tint for each loaded spool above (approximate; blacks lifted so they
-  // stay visible on the dark plate). Slots absent here render as an empty PTFE tube.
+  // stay visible on the dark plate). Colours the tube of every loaded dock and the
+  // toolhead of the active one. Slots absent from FILAMENTS render as an empty tube.
   var SLOT_COLORS = {
     1: '#3d3d46',
     2: '#2c2c31',
@@ -350,7 +357,8 @@
     var s = '<svg viewBox="0 0 320 30" aria-hidden="true">';
     for (var i = 1; i <= 8; i++) {
       var cx = 20 + (i - 1) * 40;
-      s += '<g class="dock">' +
+      // --slot carries the filament colour so CSS can paint the active toolhead with it.
+      s += '<g class="dock"' + (FILAMENTS[i] ? ' style="--slot: ' + (SLOT_COLORS[i] || '#c8c8c8') + '"' : '') + '>' +
         '<rect class="glow" x="' + (cx - 17.5) + '" y="5.5" width="35" height="22.5" rx="4" fill="var(--accent)" fill-opacity="0.28" stroke="var(--accent)" stroke-opacity="0.9"/>' +
         '<line x1="' + cx + '" y1="2.5" x2="' + cx + '" y2="8.5" stroke="rgba(255,255,255,' + (FILAMENTS[i] ? '0.3' : '0.15') + ')" stroke-width="4.5" stroke-linecap="round"/>' +
         (FILAMENTS[i] ? '<line x1="' + cx + '" y1="2.5" x2="' + cx + '" y2="8.5" stroke="' + (SLOT_COLORS[i] || '#c8c8c8') + '" stroke-width="2.5" stroke-linecap="round"/>' : '') +
