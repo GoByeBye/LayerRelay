@@ -1,6 +1,6 @@
 <!--
   OBS browser-source overlay for a Prusa CORE One + INDX toolchanger.
-  Full-width top banner sized for a 1920x150 OBS browser source (it fills the source
+  Full-width bottom banner sized for a 1920x150 OBS browser source (it fills the source
   exactly via 100vh/100vw). Two bands: top = thumbnail + job title/bed-message + progress;
   bottom = all print stats in one even 10-column row. Transparent page, only the banner shows.
   Enable "Refresh browser when scene becomes active" for a cheap manual recovery.
@@ -24,12 +24,12 @@
 
   #card {
     position: fixed;
-    left: 0; right: 0; top: 0;
+    left: 0; right: 0; bottom: 0;
     width: 100vw; height: 100vh;          /* fill the OBS source (sized 1920x150) exactly */
     display: flex; flex-direction: column; justify-content: center; gap: 12px;
     background: var(--card-bg);
-    border-bottom: 6px solid var(--accent);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    border-top: 6px solid var(--accent);
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.45);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
     padding: 16px 34px;
