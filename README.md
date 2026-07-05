@@ -4,7 +4,7 @@ A local OBS overlay for a **Prusa CORE One + INDX 8-tool toolchanger**. Shows th
 print with a live thumbnail, progress (with a tick mark at every upcoming toolchange),
 remaining time plus a wall-clock finish estimate, temperatures (nozzle, bed, chamber when
 reported), the dock panel with the tool in use lit in its filament colour, the upcoming
-toolchange ("next 5 · 12m"), the current layer, and swap/waste counters.
+toolchange ("next 5"), the current layer, and swap/waste counters.
 
 The printer's PrusaLink API does **not** expose the active tool or swap count (the INDX isn't
 surfaced as an MMU), so the server downloads the print's `.bgcode` once, decodes it in pure JS
