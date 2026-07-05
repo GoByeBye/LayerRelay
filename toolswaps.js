@@ -13,11 +13,17 @@ function parseMaterials(meta) {
 }
 
 // Parse decoded gcode text into a timeline of tool-change events.
-// Returns { initialTool, totalSwaps, timeline:[{progressPct, remainingMin, toolIndex, cumulativeSwaps}], toolsSeen:[...] }
+// Returns { initialTool, totalSwaps, timeline:[{progressPct, remainingMin, toolIndex, cumulativeSwaps}],
+//   layers:[{progressPct, remainingMin, z}], toolsSeen:[...] }
 function buildTimeline(gcodeText) {
   let lastPct = 0, lastRemMin = null, tool = null, initialTool = null, swaps = 0;
   const timeline = [];
   const toolsSeen = new Set();
+  // Layer timeline: PrusaSlicer marks each layer with ;LAYER_CHANGE followed by ;Z:<mm>.
+  // Recording the progress position of every layer lets the live view derive the current
+  // layer from progress %, immune to z-hop noise in the reported Z axis.
+  const layers = [];
+  let pendingLayer = false;
   // Waste = filament purged during toolchanges. PrusaSlicer marks it with ;FLUSH_START/END
   // (the color flush) and ;EXCLUDE_E_START/END (the tool-load prime); sum the E in those.
   let wasteMm = 0, inFlush = false, inExcl = false;
@@ -35,6 +41,12 @@ function buildTimeline(gcodeText) {
       else if (line.indexOf(';FLUSH_END') === 0) inFlush = false;
       else if (line.indexOf(';EXCLUDE_E_START') === 0) inExcl = true;
       else if (line.indexOf(';EXCLUDE_E_END') === 0) inExcl = false;
+      else if (line.indexOf(';LAYER_CHANGE') === 0) pendingLayer = true;
+      else if (pendingLayer && line.indexOf(';Z:') === 0) {
+        const z = parseFloat(line.slice(3));
+        layers.push({ progressPct: lastPct, remainingMin: lastRemMin, z: isNaN(z) ? null : z });
+        pendingLayer = false;
+      }
       continue;
     }
 
@@ -73,45 +85,62 @@ function buildTimeline(gcodeText) {
     totalSwaps: swaps,
     totalWasteMm: wasteMm,
     timeline,
+    layers,
     toolsSeen: [...toolsSeen].sort((a, b) => a - b),
   };
 }
 
-// Coarse progress-based estimate of the swap index. Only ~usable to a resolution of however many
-// swaps share one integer progress percent (for a 1000-swap print that's ~10 swaps), so it is used
-// ONLY to seed / sanity-anchor the physical dip count, never as the live tool source.
-// Returns { currentTool, swapsDone, swapsTotal }.
+// Binary search shared by mapLive/currentLayer: index of the last event with
+// progressPct <= livePct, refined by live remaining time (monotonically decreasing)
+// among events that share the boundary percent. -1 when nothing has happened yet.
+function liveIndex(events, livePct, liveRemMin) {
+  let lo = 0, hi = events.length - 1, idx = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (events[mid].progressPct <= livePct) { idx = mid; lo = mid + 1; }
+    else hi = mid - 1;
+  }
+  if (idx >= 0 && liveRemMin != null) {
+    const pct = events[idx].progressPct;
+    while (idx >= 0 && events[idx].progressPct === pct && events[idx].remainingMin != null &&
+           events[idx].remainingMin < liveRemMin) {
+      idx--;
+    }
+  }
+  return idx;
+}
+
+// Progress-based live position in the print: current/next tool, swap counts, waste and layer.
+// Resolution is however many events share one integer progress percent (for a 1000-swap print
+// that's ~10 swaps); live remaining time disambiguates within a percent (see liveIndex).
+// Returns { currentTool, swapsDone, swapsTotal, wasteDone, wasteTotal,
+//           nextTool, nextSwapRemMin, currentLayer, totalLayers }.
 function mapLive(analysis, livePct, liveRemMin) {
   const tl = analysis.timeline;
   const swapsTotal = analysis.totalSwaps;
-  if (!tl.length) return { currentTool: analysis.initialTool, swapsDone: 0, swapsTotal };
-
-  // Binary search: last event with progressPct <= livePct.
-  let lo = 0, hi = tl.length - 1, idx = -1;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    if (tl[mid].progressPct <= livePct) { idx = mid; lo = mid + 1; }
-    else hi = mid - 1;
-  }
-
   const wasteTotal = analysis.totalWasteG ?? null;
-  if (idx < 0) return { currentTool: analysis.initialTool, swapsDone: 0, swapsTotal, wasteDone: 0, wasteTotal };
 
-  // Resolution fix: several swaps can share one integer percent. Among events at the
-  // same percent as the boundary, use live remaining time (monotonically decreasing)
-  // to decide which have actually happened.
-  if (liveRemMin != null) {
-    const pct = tl[idx].progressPct;
-    while (idx >= 0 && tl[idx].progressPct === pct && tl[idx].remainingMin != null &&
-           tl[idx].remainingMin < liveRemMin) {
-      idx--;
-    }
-    if (idx < 0) return { currentTool: analysis.initialTool, swapsDone: 0, swapsTotal, wasteDone: 0, wasteTotal };
+  // Layer position from the layer timeline (same progress mapping as the swaps, so it is
+  // immune to z-hops in the live Z reading). Layer numbers are 1-based; 0 = before layer 1.
+  const layers = analysis.layers || [];
+  const currentLayer = layers.length ? liveIndex(layers, livePct, liveRemMin) + 1 : null;
+  const totalLayers = layers.length || null;
+
+  const idx = tl.length ? liveIndex(tl, livePct, liveRemMin) : -1;
+  const next = tl[idx + 1] || null; // upcoming toolchange, null once on the last tool
+  const nextTool = next ? next.toolIndex : null;
+  // Minutes until the next swap, from the M73 remaining-time recorded at that swap.
+  const nextSwapRemMin = next && next.remainingMin != null && liveRemMin != null
+    ? Math.max(0, liveRemMin - next.remainingMin) : null;
+
+  if (idx < 0) {
+    return { currentTool: analysis.initialTool, swapsDone: 0, swapsTotal, wasteDone: 0, wasteTotal,
+             nextTool, nextSwapRemMin, currentLayer, totalLayers };
   }
-
   const gPerMm = analysis.gPerMm || 0;
   const wasteDone = tl[idx].cumulativeWasteMm != null ? tl[idx].cumulativeWasteMm * gPerMm : null;
-  return { currentTool: tl[idx].toolIndex, swapsDone: tl[idx].cumulativeSwaps, swapsTotal, wasteDone, wasteTotal };
+  return { currentTool: tl[idx].toolIndex, swapsDone: tl[idx].cumulativeSwaps, swapsTotal,
+           wasteDone, wasteTotal, nextTool, nextSwapRemMin, currentLayer, totalLayers };
 }
 
 // grams of filament per mm of extruded length, from diameter (mm) and density (g/cm3).
@@ -120,7 +149,7 @@ function gramsPerMm(diameterMm, densityGcm3) {
   return areaMm2 * densityGcm3 / 1000; // mm3 -> cm3 (/1000) * g/cm3
 }
 
-const ANALYSIS_VERSION = 4; // bump when the analysis shape changes so stale caches are rebuilt
+const ANALYSIS_VERSION = 5; // bump when the analysis shape changes so stale caches are rebuilt
 
 const firstNum = (csv, dflt) => {
   if (!csv) return dflt;

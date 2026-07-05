@@ -1,12 +1,14 @@
 # 3d-livestream overlay
 
 A local OBS overlay for a **Prusa CORE One + INDX 8-tool toolchanger**. Shows the current
-print with a live thumbnail, progress, remaining time, nozzle temperature, the current tool
-in use, and how many tool swaps have happened so far.
+print with a live thumbnail, progress (with a tick mark at every upcoming toolchange),
+remaining time plus a wall-clock finish estimate, temperatures (nozzle, bed, chamber when
+reported), the dock panel with the tool in use lit in its filament colour, the upcoming
+toolchange ("next 5 · 12m"), the current layer, and swap/waste counters.
 
 The printer's PrusaLink API does **not** expose the active tool or swap count (the INDX isn't
 surfaced as an MMU), so the server downloads the print's `.bgcode` once, decodes it in pure JS
-(Heatshrink + MeatPack), builds a `progress% → {tool, swaps}` timeline, and maps the live
+(Heatshrink + MeatPack), builds a `progress% → {tool, swaps, layer}` timeline, and maps the live
 progress onto it. Swap counting is validated against the file's own `total toolchanges` metadata.
 
 ## Setup
@@ -35,7 +37,8 @@ Then open **http://localhost:8787/**; that's the overlay.
 
 1. Add a **Browser** source.
 2. URL: `http://localhost:8787/`
-3. Width **400**, Height **230** (the card sits in the top-left with a 16px margin).
+3. Width **1920**, Height **150**; anchor it to the bottom of the canvas. The overlay is a
+   full-width banner that fills the source exactly (100vw/100vh).
 4. The page background is transparent, so it composites straight over your video.
 5. Recommended: tick **"Refresh browser when scene becomes active"** for easy recovery.
 
@@ -43,10 +46,10 @@ Then open **http://localhost:8787/**; that's the overlay.
 
 | File | Role |
 |------|------|
-| `server.js` | Polls PrusaLink (`/api/v1/status`, `/api/v1/job`) via HTTP Digest auth, downloads + analyzes the print's bgcode once per job, serves `/api/state`, `/api/thumbnail`, and the overlay. |
+| `server.js` | Polls PrusaLink (`/api/v1/status`, `/api/v1/job`) via HTTP Digest auth, downloads + analyzes the print's bgcode once per job, serves `/api/state`, `/api/jobmap`, `/api/thumbnail`, and the overlay. |
 | `digest.js` | Minimal HTTP Digest auth client (Node has none built in). |
 | `bgcode.js` | Pure-JS `.bgcode` decoder: container iteration + Heatshrink 11/4 & 12/4 + MeatPack unbinarize. Ported from [prusa3d/libbgcode](https://github.com/prusa3d/libbgcode). |
-| `toolswaps.js` | Builds the tool-change timeline from decoded G-code and maps live progress → current tool + swaps done. |
+| `toolswaps.js` | Builds the tool-change + layer timelines from decoded G-code and maps live progress → current tool, swaps done, next swap, current layer. |
 | `public/overlay.html` | Self-contained transparent overlay (no external requests). |
 | `test-decode.js` | Diagnostic: `node test-decode.js <file.bgcode>` prints decode + timeline stats. |
 
@@ -63,9 +66,19 @@ Then open **http://localhost:8787/**; that's the overlay.
   "currentTool": 4,     // 0-based tool index (as in the G-code)
   "toolLabel": 5,       // 1-based label (as shown on the printer UI)
   "material": "PETG",   // filament for the current tool
+  "nextToolLabel": 3,   // upcoming toolchange (1-based), null on the last tool
+  "nextSwapInSec": 740, // seconds until that swap (from the M73 timeline), null if unknown
+  "currentLayer": 45,   // 1-based (0 while below layer 1), from the layer timeline
+  "totalLayers": 240,
+  "chamberTemp": 34.2, "chamberTarget": 35,  // CORE One chamber (Connect telemetry; null without it)
   "swapsDone": 256, "swapsTotal": 654,
   "swapping": false
 }
+```
+
+`/api/jobmap` (fetched by the overlay once per job, for the progress-bar swap ticks):
+```json
+{ "jobKey": "449::MULTI-~2.BGC", "swapPcts": [0, 0, 1, 1, 2], "totalLayers": 240 }
 ```
 
 ## Notes
