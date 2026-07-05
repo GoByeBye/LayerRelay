@@ -166,7 +166,7 @@
      like "255° →290°" keep slack inside their chip. line-height 0 keeps the mixed font
      sizes from inflating the line box, which would make those chips taller than the rest. */
   .stat .value .sub { font-size: 17px; line-height: 0; }
-  /* Right half of the Tool label: upcoming toolchange ("next 5 · 12m19s"), or the swap in
+  /* Right half of the Tool label: upcoming toolchange ("next 5 · 12m"), or the swap in
      flight ("2 → 5", accent + pulsing) while the toolchanger is physically swapping. */
   #tool-label { display: flex; justify-content: space-between; gap: 8px; }
   #tool-next { text-transform: none; letter-spacing: 0; color: rgba(255, 255, 255, 0.7); }
@@ -454,6 +454,17 @@
     return '~' + String(end.getHours()).padStart(2, '0') + ':' + String(end.getMinutes()).padStart(2, '0');
   }
 
+  // Next-swap ETA at the resolution the data actually has: the swap timeline is built
+  // from integer-minute M73 records, so seconds would be false precision (and the
+  // countdown would sit at 00m00s whenever the estimate undershoots the real swap).
+  function fmtNextIn(s) {
+    if (s == null) return '';
+    if (s < 90) return '<1m';
+    var m = Math.round(s / 60);
+    if (m < 60) return m + 'm';
+    return ((m / 60) | 0) + 'h' + String(m % 60).padStart(2, '0') + 'm';
+  }
+
   // Symmetric to remainingSec: climbs between polls while printing, frozen otherwise.
   function elapsedSec() {
     var d = S.data;
@@ -636,7 +647,7 @@
       nextTxt = flipFresh ? S.prevTool + ' → ' + d.toolLabel : '⇄ swapping';
     } else if (d.state === 'PRINTING' && d.nextToolLabel != null) {
       var ns = nextSwapSec();
-      nextTxt = 'next ' + d.nextToolLabel + (ns != null ? ' · ' + fmtEta(ns) : '');
+      nextTxt = 'next ' + d.nextToolLabel + (ns != null ? ' · ' + fmtNextIn(ns) : '');
     }
     setText(el.toolNext, nextTxt);
     el.toolNext.classList.toggle('swapping', !!d.swapping);
