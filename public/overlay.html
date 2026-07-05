@@ -126,7 +126,7 @@
   /* === Bottom band: every stat in ONE even row (no wrap) =================== */
   #stats {
     display: grid; grid-template-columns: repeat(12, 1fr);
-    align-items: end; column-gap: 16px;
+    align-items: end; column-gap: 10px;   /* chips separate the cells, so a slim gap is enough */
     border-top: 1px solid rgba(255, 255, 255, 0.10);
     padding-top: 10px;
   }
@@ -136,22 +136,34 @@
     color: rgba(255, 255, 255, 0.5);
     overflow: hidden; text-overflow: ellipsis;
   }
+  /* Each value sits in a Prusa-Connect-style chip. Fixed 25px line + padding keeps every
+     chip the same ~33px height regardless of the face size inside, only a few px taller
+     than the bare text was (the band has little vertical headroom in the OBS source). */
   .stat .value {
-    font-size: 24px; font-weight: 600; color: #fff;
+    font-size: 24px; line-height: 25px; font-weight: 600; color: #fff;
     overflow: hidden; text-overflow: ellipsis;
+    background: rgba(16, 19, 24, 0.66);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 6px;
+    padding: 3px 9px;
   }
   /* 2-track stats: Material holds a long filament name (with a smaller face so it fits one
      line), and Tool needs the width for the 8-slot dock panel below. */
   .stat.wide { grid-column: span 2; }
   .stat.wide .value { font-size: 16px; }
   .sub { color: rgba(255,255,255,0.5); font-weight: 400; }
-  /* The waste grams breakdown is the longest stat value; smaller face so it fits its track. */
-  #waste .sub { font-size: 17px; }
+  /* Stat sub-readouts (units, targets, gram breakdowns) get a smaller face so long values
+     like "255° →290°" keep slack inside their chip. line-height 0 keeps the mixed font
+     sizes from inflating the line box, which would make those chips taller than the rest. */
+  .stat .value .sub { font-size: 18px; line-height: 0; }
+  /* The waste grams breakdown is the longest stat value; smallest face so it fits its track. */
+  #waste .sub { font-size: 16px; }
 
   /* Tool: a mini front view of the INDX dock plate (8 hanging tools, numbered like the
-     printer) instead of a text badge. The active dock lights up in the accent colour and
-     pulses mid-swap; each tube is tinted with the filament loaded in that slot. */
-  #tool svg { display: block; width: 100%; height: 30px; }
+     printer) instead of a text badge. The chip is the plate; the active dock lights up in
+     the accent colour and pulses mid-swap; each tube is tinted with the loaded filament. */
+  #tool { padding: 1px 8px; }             /* 29px panel + padding + border = 33px, same as text chips */
+  #tool svg { display: block; width: 100%; height: 29px; }
   #tool .glow { opacity: 0; transition: opacity 0.3s ease; }
   #tool .dock.active .glow { opacity: 1; }
   #tool .body { fill: rgba(255, 255, 255, 0.55); }
@@ -175,7 +187,13 @@
     font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em;
     color: rgba(255, 255, 255, 0.5);
   }
-  .sumtile .value { font-size: 26px; font-weight: 600; color: #fff; }
+  .sumtile .value {
+    font-size: 26px; line-height: 26px; font-weight: 600; color: #fff;
+    background: rgba(16, 19, 24, 0.66);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 6px;
+    padding: 3px 14px;
+  }
   .sumtile .value.accent { color: var(--accent); }
 
   /* Hide print-only sections when not actively printing/paused */
@@ -324,13 +342,12 @@
     8: '#8257ad',
   };
 
-  // Build the INDX dock panel once: plate, 8 hanging tools (tube, coupler, heatsink,
-  // nozzle) and the slot numbers printed on the plate, mirroring the printer's front.
-  // render() only toggles .active/.swapping on these groups afterwards.
+  // Build the INDX dock panel once: 8 hanging tools (tube, coupler, heatsink, nozzle)
+  // and their slot numbers, mirroring the printer's front. The #tool chip behind the
+  // svg acts as the plate. render() only toggles .active/.swapping on these groups.
   var docks = [];
   (function () {
-    var s = '<svg viewBox="0 0 320 30" aria-hidden="true">' +
-      '<rect x="0.5" y="4" width="319" height="25.5" rx="4.5" fill="rgba(8,10,14,0.6)" stroke="rgba(255,255,255,0.18)"/>';
+    var s = '<svg viewBox="0 0 320 30" aria-hidden="true">';
     for (var i = 1; i <= 8; i++) {
       var cx = 20 + (i - 1) * 40;
       s += '<g class="dock">' +
