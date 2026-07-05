@@ -180,7 +180,7 @@ async function poll() {
     // Tool source is live progress %, with remaining time as the tiebreaker when several swaps
     // share one integer percent (see mapLive). Physical dip-counting was tried and drove the tool
     // wrong, so progress+time is authoritative again; trackSwaps is kept only for the
-    // "swapping…" badge (the nozzle-temp crater reliably marks a swap in progress).
+    // swap-in-progress indicator (the nozzle-temp crater reliably marks a swap in progress).
     let currentTool = null, swapsDone = null, swapsTotal = null, material = null;
     let wasteDone = null, wasteTotal = null;
     const livePct = sjob?.progress ?? null;
@@ -227,8 +227,8 @@ async function poll() {
       wasteDone: round1(wasteDone),
       wasteTotal: round1(wasteTotal),
       filamentG: haveAnalysis && analysis.totalFilamentG != null ? Math.round(analysis.totalFilamentG) : null,
-      // True for the whole dip->reheat window of an INDX toolchange (see trackSwaps), so the overlay
-      // shows "swapping…" until the new tool is actually up to temp and in use.
+      // True for the whole dip->reheat window of an INDX toolchange (see trackSwaps), so the
+      // overlay's dock panel keeps pulsing until the new tool is actually up to temp and in use.
       swapping: track.swapping,
       analyzing: analyzing && !haveAnalysis,
       updatedAt: Math.floor(Date.now() / 1000),
