@@ -23,7 +23,7 @@ let connectFailures = 0;      // consecutive Connect failures (for log throttlin
 
 // ---- shared state ------------------------------------------------------------
 let state = { state: 'UNKNOWN', updatedAt: 0 };
-let analysis = null;          // { jobKey, initialTool, totalSwaps, timeline, toolsSeen }
+let analysis = null;          // { jobKey, initialTool, totalSwaps, timeline, layers, toolsSeen }
 let analyzing = false;        // guards concurrent bgcode downloads
 let analysisFailCount = 0;    // consecutive analysis download failures (for backoff)
 let analysisFailedKey = null; // jobKey that last failed
@@ -183,6 +183,7 @@ async function poll() {
     // swap-in-progress indicator (the nozzle-temp crater reliably marks a swap in progress).
     let currentTool = null, swapsDone = null, swapsTotal = null, material = null;
     let wasteDone = null, wasteTotal = null;
+    let nextTool = null, nextSwapInSec = null, currentLayer = null, totalLayers = null;
     const livePct = sjob?.progress ?? null;
     const liveRemMin = sjob?.time_remaining != null ? sjob.time_remaining / 60 : null;
     const haveAnalysis = analysis && analysis.jobKey === jobKey;
@@ -195,9 +196,14 @@ async function poll() {
       wasteDone = m.wasteDone;
       wasteTotal = m.wasteTotal;
       material = materialFor(analysis, currentTool);
+      nextTool = m.nextTool;
+      nextSwapInSec = m.nextSwapRemMin != null ? Math.round(m.nextSwapRemMin * 60) : null;
+      currentLayer = m.currentLayer;
+      totalLayers = m.totalLayers;
     } else if (haveAnalysis) {
       swapsTotal = analysis.totalSwaps;
       wasteTotal = analysis.totalWasteG;
+      totalLayers = (analysis.layers || []).length || null;
     }
     // Printer/UI labels tools starting at 1, while the G-code (and our index) is 0-based.
     const toolLabel = currentTool != null ? currentTool + 1 : null;
@@ -225,6 +231,12 @@ async function poll() {
       currentTool,
       toolLabel,
       material,
+      // Upcoming toolchange (1-based label like toolLabel) and seconds until it, from the
+      // M73 remaining-time recorded at that swap in the gcode timeline.
+      nextToolLabel: nextTool != null ? nextTool + 1 : null,
+      nextSwapInSec,
+      currentLayer,           // 1-based (0 while below layer 1), from the layer timeline on progress %
+      totalLayers,
       swapsDone,              // swaps completed so far (from progress %), index into tool sequence
       swapsTotal,
       wasteDone: round1(wasteDone),
@@ -306,17 +318,25 @@ function mergeConnect(base) {
   const out = { ...base };
   const keys = ['state', 'progress', 'timeRemainingSec', 'timeElapsedSec', 'nozzleTemp',
     'nozzleTarget', 'bedTemp', 'bedTarget', 'axisZ', 'flow', 'speed', 'fanHotend', 'fanPrint',
-    'currentTool', 'toolLabel', 'material'];
+    'currentTool', 'toolLabel', 'material', 'chamberTemp', 'chamberTarget'];
   for (const k of keys) out[k] = c[k];
   if (c.name) out.name = c.name;
   if (c.filamentG != null) out.filamentG = c.filamentG;
-  // Swap/waste totals come from bgcode analysis; advance the "done" counts off Connect's progress.
+  // Swap/waste/layer positions come from bgcode analysis; advance them off Connect's progress.
+  // NOTE: `analysis` can describe the PREVIOUS job if the local poll (which owns the jobKey
+  // and the analysis lifecycle) is down across a job switch while Connect stays up; Connect's
+  // job identity isn't comparable to our jobKey, so there is no cheap guard. Long-standing
+  // behavior for swaps/waste, extended knowingly to the next-swap/layer fields.
   if (analysis && c.progress != null) {
     const m = mapLive(analysis, c.progress, c.timeRemainingSec != null ? c.timeRemainingSec / 60 : null);
     out.swapsDone = m.swapsDone;
     out.swapsTotal = m.swapsTotal;
     out.wasteDone = round1(m.wasteDone);
     out.wasteTotal = round1(m.wasteTotal);
+    out.nextToolLabel = m.nextTool != null ? m.nextTool + 1 : null;
+    out.nextSwapInSec = m.nextSwapRemMin != null ? Math.round(m.nextSwapRemMin * 60) : null;
+    out.currentLayer = m.currentLayer;
+    out.totalLayers = m.totalLayers;
   }
   return { out, online: connectOnline, lastGood: connectLastGoodAt };
 }
@@ -332,6 +352,17 @@ app.get('/api/state', (_req, res) => {
     online,
     staleSec: lastGood ? nowSec - lastGood : null,
     updatedAt: nowSec,
+  });
+});
+// Per-job map for the overlay's progress-bar swap ticks: every toolchange's progress
+// position, fetched once per job (keyed by jobKey == thumbnailKey) instead of per poll.
+app.get('/api/jobmap', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  if (!analysis) return res.json({ jobKey: null, swapPcts: [], totalLayers: null });
+  res.json({
+    jobKey: analysis.jobKey,
+    swapPcts: analysis.timeline.map((e) => e.progressPct),
+    totalLayers: (analysis.layers || []).length || null,
   });
 });
 // Debug sink: the overlay POSTs event lines here so behavior can be observed server-side.

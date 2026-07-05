@@ -110,7 +110,12 @@
   #card.dead #stale-dot { background: #e5484d; display: block; }
 
   #progress { flex: 0 0 600px; margin-left: auto; }
-  .track { height: 10px; border-radius: 5px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+  /* The track's background-image is a canvas render of the job's toolchange positions
+     (one faint tick per swap, drawn once per job); the fill covers ticks already passed. */
+  .track {
+    height: 10px; border-radius: 5px; background-color: rgba(255, 255, 255, 0.12);
+    background-size: 100% 100%; overflow: hidden;
+  }
   #fill {
     height: 100%; width: 0%;
     background: linear-gradient(90deg, var(--accent), #ff8a50);
@@ -124,12 +129,17 @@
   #eta { white-space: nowrap; }
 
   /* === Bottom band: every stat in ONE even row (no wrap) =================== */
+  /* 12 columns normally; a 13th opens up for the Chamber stat once the printer
+     reports a chamber temperature (Connect telemetry only, so it can be absent). */
   #stats {
     display: grid; grid-template-columns: repeat(12, 1fr);
     align-items: end; column-gap: 10px;   /* chips separate the cells, so a slim gap is enough */
     border-top: 1px solid rgba(255, 255, 255, 0.10);
     padding-top: 10px;
   }
+  #chamber-stat { display: none; }
+  #stats.has-chamber { grid-template-columns: repeat(13, 1fr); }
+  #stats.has-chamber #chamber-stat { display: flex; }
   .stat { display: flex; flex-direction: column; gap: 3px; min-width: 0; white-space: nowrap; }
   .stat .label {
     font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em;
@@ -140,7 +150,7 @@
      chip the same ~33px height regardless of the face size inside, only a few px taller
      than the bare text was (the band has little vertical headroom in the OBS source). */
   .stat .value {
-    font-size: 24px; line-height: 25px; font-weight: 600; color: #fff;
+    font-size: 22px; line-height: 25px; font-weight: 600; color: #fff;
     overflow: hidden; text-overflow: ellipsis;
     background: rgba(16, 19, 24, 0.66);
     border: 1px solid rgba(255, 255, 255, 0.14);
@@ -155,9 +165,12 @@
   /* Stat sub-readouts (units, targets, gram breakdowns) get a smaller face so long values
      like "255° →290°" keep slack inside their chip. line-height 0 keeps the mixed font
      sizes from inflating the line box, which would make those chips taller than the rest. */
-  .stat .value .sub { font-size: 18px; line-height: 0; }
-  /* The waste grams breakdown is the longest stat value; smallest face so it fits its track. */
-  #waste .sub { font-size: 16px; }
+  .stat .value .sub { font-size: 17px; line-height: 0; }
+  /* Right half of the Tool label: upcoming toolchange ("next 5 · 12m19s"), or the swap in
+     flight ("2 → 5", accent + pulsing) while the toolchanger is physically swapping. */
+  #tool-label { display: flex; justify-content: space-between; gap: 8px; }
+  #tool-next { text-transform: none; letter-spacing: 0; color: rgba(255, 255, 255, 0.7); }
+  #tool-next.swapping { color: var(--accent); font-weight: 700; animation: pulse 1.2s ease-in-out infinite; }
 
   /* Tool: a mini front view of the INDX dock plate (8 hanging tools, numbered like the
      printer) instead of a text badge. The chip is the plate; the active dock gets an
@@ -238,12 +251,16 @@
       <span class="label">Bed</span>
       <span class="value tnum" id="bed">—</span>
     </div>
+    <div class="stat" id="chamber-stat">
+      <span class="label">Chamber</span>
+      <span class="value tnum" id="chamber">—</span>
+    </div>
     <div class="stat wide">
       <span class="label">Material</span>
       <span class="value" id="material">—</span>
     </div>
     <div class="stat wide">
-      <span class="label">Tool</span>
+      <span class="label" id="tool-label"><span>Tool</span><span id="tool-next" class="tnum"></span></span>
       <span class="value" id="tool">—</span>
     </div>
     <div class="stat">
@@ -255,8 +272,8 @@
       <span class="value tnum" id="flow">—</span>
     </div>
     <div class="stat">
-      <span class="label">Z</span>
-      <span class="value tnum" id="zheight">—</span>
+      <span class="label">Layer</span>
+      <span class="value tnum" id="layer">—</span>
     </div>
     <div class="stat">
       <span class="label">Fan · Hotend</span>
@@ -310,11 +327,15 @@
     eta: document.getElementById('eta'),
     temp: document.getElementById('temp'),
     bed: document.getElementById('bed'),
+    chamber: document.getElementById('chamber'),
+    stats: document.getElementById('stats'),
+    track: document.querySelector('.track'),
     material: document.getElementById('material'),
     tool: document.getElementById('tool'),
+    toolNext: document.getElementById('tool-next'),
     speed: document.getElementById('speed'),
     flow: document.getElementById('flow'),
-    zheight: document.getElementById('zheight'),
+    layer: document.getElementById('layer'),
     fanhotend: document.getElementById('fanhotend'),
     swaps: document.getElementById('swaps'),
     waste: document.getElementById('waste'),
@@ -323,7 +344,9 @@
     sumSwaps: document.getElementById('sum-swaps'),
     sumWaste: document.getElementById('sum-waste'),
   };
-  var S = { data: null, syncedAt: 0, failures: 0, lastThumbKey: null, zHist: [], lastPrint: null };
+  var S = { data: null, syncedAt: 0, failures: 0, lastThumbKey: null, zHist: [], lastPrint: null,
+            curTool: null, prevTool: null, toolChangedAt: null, swapStartedAt: null, prevSwapping: false,
+            jobmapKey: null, jobmapBusy: false, jobmapNextTry: 0, hasChamber: false };
   var KNOWN = { PRINTING: 1, PAUSED: 1, FINISHED: 1, ERROR: 1, IDLE: 1 };
 
   // Brand + colour loaded in each INDX slot, keyed by the printer-UI tool label (1-based,
@@ -413,6 +436,24 @@
     return Math.max(0, d.timeRemainingSec - elapsed);
   }
 
+  // Countdown to the next toolchange, same freeze rules as remainingSec.
+  function nextSwapSec() {
+    var d = S.data;
+    if (!d || d.nextSwapInSec == null) return null;
+    if (d.state !== 'PRINTING' || S.disconnected) return d.nextSwapInSec;
+    var elapsed = (performance.now() - S.syncedAt) / 1000;
+    return Math.max(0, d.nextSwapInSec - elapsed);
+  }
+
+  // Wall-clock finish estimate, "~03:12", from the remaining-time countdown. Rounded to
+  // whole minutes so a coarse time_remaining feed can't flap the display around :30.
+  function doneClock() {
+    var rem = remainingSec();
+    if (rem == null) return null;
+    var end = new Date(Date.now() + Math.round(rem / 60) * 60000);
+    return '~' + String(end.getHours()).padStart(2, '0') + ':' + String(end.getMinutes()).padStart(2, '0');
+  }
+
   // Symmetric to remainingSec: climbs between polls while printing, frozen otherwise.
   function elapsedSec() {
     var d = S.data;
@@ -424,7 +465,10 @@
 
   function stateLabel(d) {
     switch (d.state) {
-      case 'PRINTING': return 'Printing · ' + fmtEta(remainingSec()) + ' left';
+      case 'PRINTING': {
+        var done = doneClock();
+        return 'Printing · ' + fmtEta(remainingSec()) + ' left' + (done ? ' · done ' + done : '');
+      }
       case 'PAUSED':   return 'Paused' + (d.progress != null ? ' · ' + Math.floor(d.progress) + '%' : '');
       case 'FINISHED': return 'Print complete ✔';
       case 'IDLE':     return 'Printer idle';
@@ -444,6 +488,48 @@
 
   // Percent: whole number at 10%+, one decimal below, so small shares stay readable.
   function fmtPct(n) { return (n >= 10 ? Math.round(n) : n.toFixed(1)) + '%'; }
+
+  // Progress-bar swap ticks: fetch the job's toolchange positions once per job (keyed by
+  // thumbnailKey == jobKey) and paint them into the track as a canvas background. The
+  // orange fill sits above the background, so passed ticks disappear as the print advances.
+  function drawTicks(pcts) {
+    if (!pcts.length) { el.track.style.backgroundImage = ''; return; }
+    var W = 600, H = 10;
+    var c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    var ctx = c.getContext('2d');
+    ctx.fillStyle = 'rgba(255,255,255,0.28)';
+    // M73 progress is integer-resolution, so high-swap jobs pile many swaps onto one
+    // x column; draw each column once so the alpha doesn't stack to solid white.
+    var seen = {};
+    for (var i = 0; i < pcts.length; i++) {
+      var x = Math.round(pcts[i] / 100 * (W - 1));
+      if (seen[x]) continue;
+      seen[x] = 1;
+      ctx.fillRect(x, 2, 1, H - 4);
+    }
+    el.track.style.backgroundImage = 'url(' + c.toDataURL() + ')';
+  }
+
+  function ensureJobmap(d) {
+    // Only worth fetching once the analysis is in (swapsTotal set); re-fetch on job change.
+    if (S.jobmapBusy || d.swapsTotal == null || !d.thumbnailKey || S.jobmapKey === d.thumbnailKey) return;
+    // Throttle retries: while the server's analysis lags the new job (or the fetch fails),
+    // poll the map every few seconds instead of every render.
+    if (Date.now() < S.jobmapNextTry) return;
+    S.jobmapNextTry = Date.now() + 4000;
+    S.jobmapBusy = true;
+    fetch('/api/jobmap', { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw 0; return r.json(); })
+      .then(function (jm) {
+        // Ignore a map for a different job (analysis mid-switch); next poll retries.
+        if (jm.jobKey !== d.thumbnailKey) return;
+        S.jobmapKey = jm.jobKey;
+        drawTicks(jm.swapPcts || []);
+      })
+      .catch(function () {})
+      .finally(function () { S.jobmapBusy = false; });
+  }
 
   function render() {
     var d = S.data;
@@ -503,6 +589,19 @@
     tempCell(el.temp, d.nozzleTemp, d.nozzleTarget);
     tempCell(el.bed, d.bedTemp, d.bedTarget);
 
+    // Chamber temperature: Connect-only telemetry, so the whole column stays hidden
+    // (12-column grid) until the printer reports one. Latched for the session once seen:
+    // a dropped frame (server restart, Connect hiccup) must not reflow the band on stream.
+    if (d.chamberTemp != null) S.hasChamber = true;
+    el.stats.classList.toggle('has-chamber', S.hasChamber);
+    if (d.chamberTemp != null) tempCell(el.chamber, d.chamberTemp, d.chamberTarget);
+    else if (S.hasChamber) setText(el.chamber, '—');
+
+    // Progress-bar swap ticks: clear leftovers from the previous job, then (re)fetch
+    // the map once this job's analysis is available.
+    if (S.jobmapKey && S.jobmapKey !== d.thumbnailKey) { S.jobmapKey = null; drawTicks([]); }
+    ensureJobmap(d);
+
     // Current material for the active tool. When we know the loaded material, prefer the
     // specific brand + colour spooled in the active slot (FILAMENTS), falling back to the
     // raw material string for slots we haven't mapped.
@@ -518,16 +617,44 @@
     }
     el.toolSvg.classList.toggle('swapping', !!d.swapping && d.toolLabel == null);
 
+    // Remember the previous tool so the swap-in-flight readout can show "2 → 5".
+    if (d.toolLabel != null && d.toolLabel !== S.curTool) {
+      S.prevTool = S.curTool;
+      S.curTool = d.toolLabel;
+      S.toolChangedAt = performance.now();
+    }
+    if (d.swapping && !S.prevSwapping) S.swapStartedAt = performance.now();
+    S.prevSwapping = !!d.swapping;
+    // Right half of the Tool label: swap in flight, else the upcoming toolchange.
+    // The crater (swapping) and the label flip come from different feeds on different
+    // clocks, so only name the pair when the flip belongs to THIS swap window; before
+    // the label catches up the target is simply not known yet.
+    var nextTxt = '';
+    if (d.swapping) {
+      var flipFresh = S.prevTool != null && S.toolChangedAt != null &&
+        S.swapStartedAt != null && S.toolChangedAt >= S.swapStartedAt - 5000;
+      nextTxt = flipFresh ? S.prevTool + ' → ' + d.toolLabel : '⇄ swapping';
+    } else if (d.state === 'PRINTING' && d.nextToolLabel != null) {
+      var ns = nextSwapSec();
+      nextTxt = 'next ' + d.nextToolLabel + (ns != null ? ' · ' + fmtEta(ns) : '');
+    }
+    setText(el.toolNext, nextTxt);
+    el.toolNext.classList.toggle('swapping', !!d.swapping);
+
     // Speed / flow overrides, percentages straight off the printer.
     setText(el.speed, d.speed != null ? Math.round(d.speed) + '%' : '—');
     setText(el.flow, d.flow != null ? Math.round(d.flow) + '%' : '—');
 
-    // Live Z height, mm. Z-hops and telemetry noise make the raw value churn, so show the
+    // Layer counter from the gcode layer timeline (progress-based, so z-hops don't wobble
+    // it). currentLayer is 0 while heating/homing below layer 1 (falsy on purpose: show
+    // the Z fallback then). Until the analysis lands, fall back to the live Z height: the
     // minimum of the last few readings (the true layer Z; hops only spike upward) at 0.1mm.
-    if (d.axisZ != null) {
+    if (d.currentLayer && d.totalLayers != null) {
+      el.layer.innerHTML = d.currentLayer + '<span class="sub">/' + d.totalLayers + '</span>';
+    } else if (d.axisZ != null) {
       var z = S.zHist.length ? Math.min.apply(null, S.zHist) : d.axisZ;
-      el.zheight.innerHTML = z.toFixed(1) + '<span class="sub"> mm</span>';
-    } else setText(el.zheight, '—');
+      el.layer.innerHTML = z.toFixed(1) + '<span class="sub"> mm</span>';
+    } else setText(el.layer, d.analyzing ? '…' : '—');
 
     // Hotend fan, RPM.
     if (d.fanHotend != null) el.fanhotend.innerHTML = Math.round(d.fanHotend) + '<span class="sub"> rpm</span>';
@@ -539,11 +666,12 @@
     } else setText(el.swaps, d.analyzing ? '…' : '—');
 
     // Filament waste (purge) as a share of the total extruded filament: headline % + the
-    // raw "waste / total" grams beneath it, so viewers see how costly the multicolor swaps are.
+    // purged grams beneath it (the total is already on the progress meta line, and a
+    // "x/yyyy g" breakdown overflows the cell on multi-kg jobs).
     if (d.wasteTotal != null && d.filamentG != null && d.filamentG > 0) {
       var wg = d.wasteDone != null ? d.wasteDone : d.wasteTotal;   // live so far, else job total
       el.waste.innerHTML = fmtPct(wg / d.filamentG * 100) +
-        '<span class="sub"> ' + Math.round(wg) + '/' + Math.round(d.filamentG) + 'g</span>';
+        '<span class="sub"> ' + Math.round(wg) + 'g</span>';
     } else if (d.wasteTotal != null) {
       var wd = d.wasteDone != null ? String(Math.round(d.wasteDone)) : '…';
       setText(el.waste, wd + '/' + Math.round(d.wasteTotal) + 'g');

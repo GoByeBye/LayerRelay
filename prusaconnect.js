@@ -111,9 +111,16 @@ function mapConnectToState(j, cleanName) {
   const printing = st === 'PRINTING' || st === 'PAUSED';
   const num = (v) => (v != null ? v : null);
 
+  // CORE One chamber telemetry. The firmware sends a top-level `chamber` object
+  // ({temp, target_temp}, see Prusa-Firmware-Buddy src/connect/render.cpp); accept a
+  // flat temp_chamber spelling too in case Connect regroups it like the nozzle/bed temps.
+  const ch = j.chamber || {};
+
   return {
     state: st,
     name: cleanName(job.display_name || ''),
+    chamberTemp: num(ch.temp ?? t.temp_chamber),
+    chamberTarget: num(ch.target_temp ?? t.target_chamber),
     progress: printing ? num(job.progress) : null,
     timeRemainingSec: num(job.time_remaining),
     timeElapsedSec: num(job.time_printing),
