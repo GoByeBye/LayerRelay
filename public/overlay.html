@@ -2,7 +2,7 @@
   OBS browser-source overlay for a Prusa CORE One + INDX toolchanger.
   Full-width bottom banner sized for a 1920x150 OBS browser source (it fills the source
   exactly via 100vh/100vw). Two bands: top = thumbnail + job title/bed-message + progress;
-  bottom = all print stats in one even 10-column row. Transparent page, only the banner shows.
+  bottom = all print stats in one even row. Transparent page, only the banner shows.
   Enable "Refresh browser when scene becomes active" for a cheap manual recovery.
   Self-contained: no external requests. Polls /api/state on the same origin.
 -->
@@ -125,7 +125,7 @@
 
   /* === Bottom band: every stat in ONE even row (no wrap) =================== */
   #stats {
-    display: grid; grid-template-columns: repeat(11, 1fr);
+    display: grid; grid-template-columns: repeat(12, 1fr);
     align-items: end; column-gap: 16px;
     border-top: 1px solid rgba(255, 255, 255, 0.10);
     padding-top: 10px;
@@ -140,16 +140,28 @@
     font-size: 24px; font-weight: 600; color: #fff;
     overflow: hidden; text-overflow: ellipsis;
   }
-  /* Material holds a long filament name; give it 2 tracks + smaller face so it fits one line. */
+  /* 2-track stats: Material holds a long filament name (with a smaller face so it fits one
+     line), and Tool needs the width for the 8-slot dock panel below. */
   .stat.wide { grid-column: span 2; }
   .stat.wide .value { font-size: 16px; }
   .sub { color: rgba(255,255,255,0.5); font-weight: 400; }
-  .badge {
-    display: inline-block; padding: 1px 12px; border-radius: 999px;
-    background: rgba(250, 104, 49, 0.18); color: var(--accent);
-    font-weight: 700; font-size: 21px;
+  /* The waste grams breakdown is the longest stat value; smaller face so it fits its track. */
+  #waste .sub { font-size: 17px; }
+
+  /* Tool: a mini front view of the INDX dock plate (8 hanging tools, numbered like the
+     printer) instead of a text badge. The active dock lights up in the accent colour and
+     pulses mid-swap; each tube is tinted with the filament loaded in that slot. */
+  #tool svg { display: block; width: 100%; height: 30px; }
+  #tool .glow { opacity: 0; transition: opacity 0.3s ease; }
+  #tool .dock.active .glow { opacity: 1; }
+  #tool .body { fill: rgba(255, 255, 255, 0.38); }
+  #tool .dock.active .body { fill: var(--accent); }
+  #tool .num {
+    fill: rgba(255, 255, 255, 0.5);
+    font-size: 10px; font-weight: 600; font-variant-numeric: tabular-nums;
   }
-  .badge.swapping { animation: pulse 1.2s ease-in-out infinite; }
+  #tool .dock.active .num { fill: #fff; }
+  #tool .dock.swapping, #tool svg.swapping { animation: pulse 1.2s ease-in-out infinite; }
 
   /* === Completion summary: fills the bottom band when a print is FINISHED === */
   #summary { display: none; }
@@ -206,7 +218,7 @@
       <span class="label">Material</span>
       <span class="value" id="material">—</span>
     </div>
-    <div class="stat">
+    <div class="stat wide">
       <span class="label">Tool</span>
       <span class="value" id="tool">—</span>
     </div>
@@ -301,6 +313,42 @@
     7: 'Prusament Urbanite Gray PETG',
     8: 'Prusament Shimmering Violet PETG',
   };
+  // On-screen tint for each loaded spool above (approximate; blacks lifted so they
+  // stay visible on the dark plate). Slots absent here render as an empty PTFE tube.
+  var SLOT_COLORS = {
+    1: '#3d3d46',
+    2: '#2c2c31',
+    5: '#a9bd7f',
+    6: '#6d8fb3',
+    7: '#8b8e93',
+    8: '#8257ad',
+  };
+
+  // Build the INDX dock panel once: plate, 8 hanging tools (tube, coupler, heatsink,
+  // nozzle) and the slot numbers printed on the plate, mirroring the printer's front.
+  // render() only toggles .active/.swapping on these groups afterwards.
+  var docks = [];
+  (function () {
+    var s = '<svg viewBox="0 0 320 30" aria-hidden="true">' +
+      '<rect x="0.5" y="4" width="319" height="25.5" rx="4.5" fill="rgba(255,255,255,0.05)" stroke="rgba(255,255,255,0.12)"/>';
+    for (var i = 1; i <= 8; i++) {
+      var cx = 20 + (i - 1) * 40;
+      s += '<g class="dock">' +
+        '<rect class="glow" x="' + (cx - 16) + '" y="5.5" width="32" height="22.5" rx="4" fill="var(--accent)" fill-opacity="0.22"/>' +
+        '<line x1="' + cx + '" y1="2" x2="' + cx + '" y2="8.5" stroke="rgba(255,255,255,' + (FILAMENTS[i] ? '0.28' : '0.14') + ')" stroke-width="4" stroke-linecap="round"/>' +
+        (FILAMENTS[i] ? '<line x1="' + cx + '" y1="2" x2="' + cx + '" y2="8.5" stroke="' + (SLOT_COLORS[i] || '#c8c8c8') + '" stroke-width="2" stroke-linecap="round"/>' : '') +
+        '<rect x="' + (cx - 4) + '" y="8" width="8" height="3.5" rx="1" fill="rgba(255,255,255,0.32)"/>' +
+        '<rect class="body" x="' + (cx - 5.5) + '" y="12" width="11" height="10" rx="1.5"/>' +
+        '<path d="M' + (cx - 5.5) + ' 15.2h11M' + (cx - 5.5) + ' 18.4h11" stroke="rgba(0,0,0,0.4)" stroke-width="1"/>' +
+        '<path class="body" d="M' + (cx - 4) + ' 22h8l-2.6 4h-2.8z"/>' +
+        '<text class="num" x="' + (cx - 12) + '" y="20.5" text-anchor="middle">' + i + '</text>' +
+        '</g>';
+    }
+    el.tool.innerHTML = s + '</svg>';
+    el.toolSvg = el.tool.querySelector('svg');
+    var gs = el.tool.querySelectorAll('.dock');
+    for (var k = 0; k < gs.length; k++) docks[k + 1] = gs[k];
+  })();
 
   function setText(node, v) { if (node.textContent !== v) node.textContent = v; }
 
@@ -436,15 +484,14 @@
     var mat = d.material ? (FILAMENTS[d.toolLabel] || d.material) : (d.analyzing ? '…' : '—');
     setText(el.material, mat);
 
-    // Current tool, displayed 1-based (T0 in gcode => "T1" on the printer's UI).
-    // Note 0 is a valid tool index (== null, not falsy!). Mid-swap the badge pulses.
-    if (d.toolLabel != null) {
-      var cls = d.swapping ? 'badge swapping' : 'badge';
-      var arrow = d.swapping ? ' ⇄' : '';
-      el.tool.innerHTML = '<span class="' + cls + '">T' + d.toolLabel + arrow + '</span>';
-    } else if (d.state === 'PRINTING' && d.swapping) {
-      el.tool.innerHTML = '<span class="badge swapping">swapping…</span>';
-    } else setText(el.tool, '—');
+    // Active tool on the dock panel (toolLabel is 1-based, matching the plate numbers).
+    // The dock in use lights up; mid-swap it pulses. A swap with no known target yet
+    // (or a swap while the tool is unknown) pulses the whole panel instead.
+    for (var ti = 1; ti < docks.length; ti++) {
+      docks[ti].classList.toggle('active', ti === d.toolLabel);
+      docks[ti].classList.toggle('swapping', ti === d.toolLabel && !!d.swapping);
+    }
+    el.toolSvg.classList.toggle('swapping', !!d.swapping && d.toolLabel == null);
 
     // Speed / flow overrides, percentages straight off the printer.
     setText(el.speed, d.speed != null ? Math.round(d.speed) + '%' : '—');
@@ -471,9 +518,9 @@
     if (d.wasteTotal != null && d.filamentG != null && d.filamentG > 0) {
       var wg = d.wasteDone != null ? d.wasteDone : d.wasteTotal;   // live so far, else job total
       el.waste.innerHTML = fmtPct(wg / d.filamentG * 100) +
-        '<span class="sub"> ' + wg.toFixed(1) + '/' + Math.round(d.filamentG) + 'g</span>';
+        '<span class="sub"> ' + Math.round(wg) + '/' + Math.round(d.filamentG) + 'g</span>';
     } else if (d.wasteTotal != null) {
-      var wd = d.wasteDone != null ? d.wasteDone.toFixed(1) : '…';
+      var wd = d.wasteDone != null ? String(Math.round(d.wasteDone)) : '…';
       setText(el.waste, wd + '/' + Math.round(d.wasteTotal) + 'g');
     } else setText(el.waste, d.analyzing ? '…' : '—');
 

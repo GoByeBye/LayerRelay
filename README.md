@@ -80,9 +80,9 @@ Then open **http://localhost:8787/**; that's the overlay.
   **slow while a print is running** (the printer reads it off USB), up to a couple of minutes.
   During that window `swapsTotal`/`currentTool` are `null` and the overlay shows "analyzing…".
   The result is cached to `cache/` keyed by job, so a server restart mid-print is instant.
-- Tools: the G-code is 0-based (`T0`-`T7`); the overlay shows them 1-based (`T1`-`T8`) to match
-  the printer UI. `currentTool` in the API stays 0-based (used to index `material`); `toolLabel` is
-  the 1-based display value.
+- Tools: the G-code is 0-based (`T0`-`T7`); the overlay numbers them 1-based (slots `1`-`8` on
+  its dock panel, with the active dock highlighted) to match the printer UI. `currentTool` in the
+  API stays 0-based (used to index `material`); `toolLabel` is the 1-based display value.
 - Material per tool comes from the bgcode `filament_type` metadata (0-indexed by tool).
 - **Waste** is the filament purged during toolchanges, computed from the g-code: the sum of
   extrusion inside PrusaSlicer's `;FLUSH_START/END` (color flush) and `;EXCLUDE_E_START/END`
