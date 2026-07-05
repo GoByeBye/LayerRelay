@@ -205,7 +205,10 @@ async function poll() {
     state = {
       state: printerState,
       name: cleanName(file ? file.display_name || file.name : ''),
-      thumbnailUrl: file && file.refs && file.refs.thumbnail ? '/api/thumbnail' : null,
+      // Advertise the thumbnail only once the cached buffer is actually for THIS job;
+      // refreshThumb is async (and can fail for a while right after an upload), so without
+      // this gate the overlay would load the previous print's image and keep it all job.
+      thumbnailUrl: file && file.refs && file.refs.thumbnail && thumbCache.key === jobKey ? '/api/thumbnail' : null,
       thumbnailKey: jobKey,
       progress: livePct,
       timeRemainingSec: sjob?.time_remaining ?? null,
@@ -255,13 +258,17 @@ async function poll() {
   }
 }
 
+let thumbFetching = false; // poll retries every cycle until the key matches; don't stack downloads
 async function refreshThumb(jobKey, thumbPath) {
+  if (thumbFetching) return;
+  thumbFetching = true;
   try {
     const r = await digestGet(cfg, thumbPath, {}, 20000);
     if (r.status === 200) {
       thumbCache = { key: jobKey, buf: r.body, contentType: r.headers['content-type'] || 'image/png' };
     }
   } catch (e) { console.error(`[thumb] ${e.message}`); }
+  finally { thumbFetching = false; }
 }
 
 // Poll Prusa Connect for the active tool + live telemetry. Slower cadence than the local poll
@@ -333,9 +340,10 @@ app.post('/api/debug', express.text({ type: '*/*', limit: '64kb' }), (req, res) 
   res.set('Cache-Control', 'no-store');
   res.end('ok');
 });
-app.get('/api/thumbnail', (_req, res) => {
-  if (!thumbCache.buf) return res.status(404).end();
+app.get('/api/thumbnail', (req, res) => {
   res.set('Cache-Control', 'no-store');
+  // ?j=<jobKey> must match the cached buffer, else a fresh job would get the old print's image.
+  if (!thumbCache.buf || (req.query.j && req.query.j !== thumbCache.key)) return res.status(404).end();
   res.type(thumbCache.contentType).send(thumbCache.buf);
 });
 // No-store so OBS's browser (CEF) doesn't serve a stale overlay after edits.
