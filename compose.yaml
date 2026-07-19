@@ -1,0 +1,45 @@
+services:
+  overlay:
+    image: 3d-livestream:local
+    build:
+      context: .
+      args:
+        SOURCE_CODE_URL: "${SOURCE_CODE_URL:-https://github.com/GoByeBye/3d-livestream}"
+        VCS_REF: "${VCS_REF:-}"
+    restart: unless-stopped
+    environment:
+      SOURCE_CODE_URL: "${SOURCE_CODE_URL:-https://github.com/GoByeBye/3d-livestream}"
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${OVERLAY_PORT:-8787}:8787/tcp"
+    volumes:
+      - type: bind
+        source: ./config.json
+        target: /config/config.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: volume
+        source: overlay-data
+        target: /data
+      - type: bind
+        source: ./public/assets
+        target: /app/public/assets
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 15s
+
+volumes:
+  overlay-data:

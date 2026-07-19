@@ -1,0 +1,64 @@
+name: Feature request
+description: Propose a focused improvement or new capability.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Explain the user problem before prescribing an implementation. Do not include credentials, private URLs, or private camera imagery.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is difficult or impossible today, and who encounters it?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Dashboard or overlay
+        - Printer telemetry
+        - Camera relay
+        - Configuration or setup
+        - Docker or platform support
+        - Operator tools
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed outcome
+      description: Describe what a successful user experience would look like.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Include current workarounds or simpler options, if any.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add sanitized mockups, compatibility details, or related links.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission checks
+      options:
+        - label: I searched existing issues for a similar request.
+          required: true
+        - label: I can help test or implement this change.
+          required: false

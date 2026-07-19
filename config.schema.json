@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "3d-livestream configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["printerHost", "username", "password"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "printerHost": { "type": "string", "minLength": 1, "description": "PrusaLink hostname or IP address, without a URL scheme." },
+    "username": { "type": "string", "minLength": 1, "description": "PrusaLink Digest authentication username." },
+    "password": { "type": "string", "minLength": 1, "writeOnly": true, "description": "PrusaLink password. Keep config.json private." },
+    "listenHost": { "type": "string", "minLength": 1, "default": "127.0.0.1" },
+    "bindHost": { "type": "string", "minLength": 1, "deprecated": true, "description": "Legacy alias for listenHost." },
+    "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 8787 },
+    "sourceCodeUrl": {
+      "type": "string",
+      "pattern": "^https?://",
+      "default": "https://github.com/GoByeBye/3d-livestream",
+      "description": "Public corresponding-source URL shown to remote users. Modified deployments must point this at their exact source."
+    },
+    "pollIntervalMs": { "type": "integer", "minimum": 250, "default": 2000 },
+    "analysisCacheMaxEntries": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 100 },
+    "analysisCacheMaxBytes": { "type": "integer", "minimum": 1048576, "maximum": 1073741824, "default": 67108864 },
+    "debugMaxBytes": { "type": "integer", "deprecated": true, "description": "Ignored legacy setting." },
+    "printNameOverrides": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "maxLength": 200 },
+      "default": {}
+    },
+    "overlayHost": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "avatar": { "type": "string", "maxLength": 8, "default": "3D" },
+        "name": { "type": "string", "maxLength": 40, "default": "PRINT HOST" },
+        "badge": { "type": "string", "maxLength": 24, "default": "LIVE" },
+        "modeBadge": { "type": "string", "maxLength": 24, "default": "AUTO MODE" },
+        "icon": { "type": ["string", "null"], "pattern": "^/assets/(?!.*\\.\\.)(?!.*\\\\)[A-Za-z0-9][A-Za-z0-9._/-]*$", "default": null },
+        "iconMode": { "enum": ["image", "pet-atlas"], "default": "image" }
+      }
+    },
+    "toolCount": { "type": "integer", "minimum": 1, "maximum": 32, "default": 1 },
+    "toolSlots": {
+      "type": "object",
+      "patternProperties": {
+        "^[1-9][0-9]*$": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "loaded": { "type": "boolean" },
+            "name": { "type": "string", "maxLength": 80 },
+            "color": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" }
+          }
+        }
+      },
+      "additionalProperties": false,
+      "default": {}
+    },
+    "localBgcodeDirs": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [] },
+    "cameraRtspUrl": {
+      "writeOnly": true,
+      "default": "",
+      "description": "Empty, or an rtsp:// or rtsps:// camera URL.",
+      "anyOf": [
+        { "const": "" },
+        { "type": "string", "pattern": "^rtsps?://" }
+      ]
+    },
+    "cameraStreamEnabled": { "type": "boolean", "description": "When omitted, a non-empty cameraRtspUrl enables the relay automatically." },
+    "cameraFfmpegPath": { "type": "string", "minLength": 1, "default": "ffmpeg" },
+    "cameraStreamFps": { "type": "integer", "minimum": 1, "maximum": 30, "default": 24 },
+    "cameraStreamWidth": { "type": "integer", "minimum": 320, "maximum": 3840, "default": 1920 },
+    "cameraStreamJpegQuality": { "type": "integer", "minimum": 2, "maximum": 31, "default": 5 },
+    "cameraStreamThreads": { "type": "integer", "minimum": 1, "maximum": 16, "default": 4 },
+    "cameraStreamKillGraceMs": { "type": "integer", "minimum": 500, "maximum": 10000, "default": 3000 },
+    "cameraStreamIdleMs": { "type": "integer", "minimum": 1000, "maximum": 300000, "default": 10000 },
+    "cameraStreamStallMs": { "type": "integer", "minimum": 5000, "maximum": 120000, "default": 20000 },
+    "cameraStreamIoTimeoutMs": { "type": "integer", "minimum": 3000, "maximum": 120000, "default": 15000 },
+    "cameraStreamRestartBaseMs": { "type": "integer", "minimum": 250, "maximum": 30000, "default": 1000 },
+    "cameraStreamRestartMaxMs": { "type": "integer", "minimum": 1000, "maximum": 120000, "default": 15000 },
+    "cameraStreamMaxFrameBytes": { "type": "integer", "minimum": 1048576, "maximum": 67108864, "default": 16777216 },
+    "useConnect": { "type": "boolean", "description": "Explicitly enable or disable Prusa Connect. When omitted, complete credentials enable it." },
+    "connectPrinterUuid": { "type": "string", "default": "" },
+    "connectPollMs": { "type": "integer", "minimum": 1000, "default": 5000 },
+    "connectClientId": { "type": "string", "description": "Optional override for the experimental integration's built-in public browser client ID." },
+    "connectRefreshToken": { "type": "string", "writeOnly": true, "default": "" },
+    "useNetatmo": { "type": "boolean", "description": "Explicitly enable or disable Netatmo. When omitted, complete credentials enable it." },
+    "netatmoClientId": { "type": "string", "writeOnly": true, "default": "" },
+    "netatmoClientSecret": { "type": "string", "writeOnly": true, "default": "" },
+    "netatmoRefreshToken": { "type": "string", "writeOnly": true, "default": "" },
+    "netatmoPollMs": { "type": "integer", "minimum": 60000, "default": 300000 },
+    "automationLeaseMs": { "type": "integer", "minimum": 15000, "maximum": 300000, "default": 45000 },
+    "lastStateWriteMs": { "type": "integer", "minimum": 5000, "default": 10000 },
+    "maxPrinterJsonBytes": { "type": "integer", "minimum": 1024, "default": 1048576 },
+    "maxPrinterResponseBytes": { "type": "integer", "minimum": 1024, "default": 536870912 },
+    "apiToken": {
+      "writeOnly": true,
+      "default": "",
+      "description": "Empty, or a bearer token of at least 32 characters. Setup generates a random value.",
+      "anyOf": [
+        { "const": "" },
+        { "type": "string", "minLength": 32 }
+      ]
+    }
+  }
+}

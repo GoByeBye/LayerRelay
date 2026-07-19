@@ -1,0 +1,118 @@
+name: Bug report
+description: Report reproducible behavior that appears incorrect.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve 3d-livestream. Search existing issues first.
+
+        Never paste `config.json`, access or refresh tokens, passwords, private camera URLs, or unredacted logs. Rotate a credential immediately if it was exposed.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what part of the dashboard or service was affected?
+      placeholder: A concise description of the problem.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installation method
+      options:
+        - Native Bun
+        - Docker Compose
+        - Docker without Compose
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Provide a release tag or commit SHA.
+      placeholder: v0.1.0 or abc1234
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Host operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: runtime
+    attributes:
+      label: Runtime versions
+      description: Include the Bun version, or the container image tag.
+      placeholder: Bun 1.3.14
+
+  - type: input
+    id: printer
+    attributes:
+      label: Printer and firmware
+      description: Do not include printer addresses, usernames, or passwords.
+      placeholder: Prusa CORE One with INDX, firmware x.y.z
+
+  - type: input
+    id: obs
+    attributes:
+      label: OBS version
+      description: Complete this when the problem is visible in an OBS browser source.
+      placeholder: OBS Studio x.y.z
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Give the smallest reliable sequence that triggers the problem.
+      placeholder: |
+        1. Start the service with ...
+        2. Open ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs
+      description: Include only the relevant lines after removing credentials, private URLs, hostnames, IP addresses, job names, and personal information.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission checks
+      options:
+        - label: I searched existing issues for this problem.
+          required: true
+        - label: I removed secrets, private URLs, identifying data, and private camera imagery.
+          required: true

@@ -1,0 +1,35 @@
+node_modules/
+config.json
+cache/
+*.bgcode
+*.log
+captures/
+snapshots/
+printer*.jpg
+montage*.jpg
+pick*.jpg
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+credentials.json
+client_secret*.json
+tokens.json
+*.pem
+*.key
+
+# Local tools, worktrees, and editor state
+.claude/
+.codex/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+coverage/
+
+# Private/custom presentation files. Keep the directory guide public.
+public/assets/*
+!public/assets/README.md
+public/overlay-old.html
+public/overlay2.html

@@ -1,0 +1,5 @@
+# Keep the mixed Windows/Bun toolchain deterministic across clones.
+* text=auto eol=lf
+
+# Shell scripts must stay LF-only so Git Bash and WSL can execute them.
+*.sh text eol=lf
