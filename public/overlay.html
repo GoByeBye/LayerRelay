@@ -1,0 +1,1451 @@
+<!--
+  OBS browser-source overlay for a Prusa CORE One + INDX toolchanger - "1a States" design.
+  Full-width bottom banner that renders the whole print lifecycle in one bar: PRINTING
+  (orange, live percent + heating/cooling arrows + swap activity), FINISHED (green DONE,
+  stats settle to final totals), IDLE (gray READY, live-only stats dashed out), BUSY
+  (calibration/homing/filament/maintenance activity), plus PAUSED/ERROR/offline.
+  Layout, top to bottom: 5px state-coloured progress strip; header (thumbnail + job name +
+  state pill + big percent + fat progress bar with swap ticks); two stat rows separated
+  by hairline dividers.
+  Dashboard mode is selected automatically: a tall viewport (normally 1920x1080) renders
+  /api/camera.mjpeg full-frame with this telemetry card anchored over the bottom; the legacy
+  1920x420 viewport stays camera-free so an existing RTSP source is never double-polled during
+  migration. ?camera=1 forces the integrated camera and ?camera=0 forces transparent overlay
+  mode. ?controls=0 hides browser controls. Room temperature is opt-in per browser; ?room=1
+  and ?room=0 override that preference. The telemetry card stays 250px tall.
+  The page makes no third-party requests; it polls only same-origin API endpoints.
+  Enable "Refresh browser when scene becomes active" for a cheap manual recovery.
+-->
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LayerRelay</title>
+<style>
+  :root {
+    --accent: #ff8a3d;
+    --card-bg: rgba(14, 15, 18, 0.94);
+    --dim: #7a828e;          /* dashed-out / inactive values */
+    --label: #b9bfc9;        /* stat labels */
+    --meta: #cdd2da;         /* secondary text */
+    --hair: rgba(255, 255, 255, 0.13);
+  }
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; padding: 0; background: transparent; overflow: hidden; }
+  body {
+    font-family: 'IBM Plex Sans', system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #fff;
+    -webkit-font-smoothing: antialiased;
+  }
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  /* === Integrated camera dashboard ======================================== */
+  #camera-stage {
+    position: fixed; inset: 0; z-index: 0;
+    overflow: hidden; background: #08090c;
+  }
+  #camera-stage::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(180deg, rgba(0, 0, 0, 0.2), transparent 18%, transparent 68%, rgba(0, 0, 0, 0.28));
+  }
+  #camera-feed {
+    width: 100%; height: 100%; display: block; object-fit: cover;
+    opacity: 0; transition: opacity 0.35s ease;
+  }
+  #camera-stage.has-frame #camera-feed, #camera-stage.ready #camera-feed { opacity: 1; }
+  #camera-status {
+    position: absolute; left: 50%; top: 42%; z-index: 2;
+    display: flex; align-items: center; gap: 13px;
+    min-width: 292px; padding: 14px 18px;
+    border: 1px solid rgba(255, 255, 255, 0.13); border-radius: 12px;
+    background: rgba(10, 11, 14, 0.78); backdrop-filter: blur(14px);
+    box-shadow: 0 12px 35px rgba(0, 0, 0, 0.35);
+    transform: translate(-50%, -50%); opacity: 1;
+    transition: opacity 0.25s ease, transform 0.25s ease;
+  }
+  #camera-stage.ready #camera-status {
+    opacity: 0; transform: translate(-50%, calc(-50% - 5px)); pointer-events: none;
+  }
+  .camera-status-dot, .control-live-dot {
+    width: 9px; height: 9px; flex: 0 0 9px; border-radius: 50%; background: #f5a623;
+    box-shadow: 0 0 0 4px rgba(245, 166, 35, 0.13);
+  }
+  #camera-stage.loading .camera-status-dot { animation: pulse 1.2s ease-in-out infinite; }
+  #camera-stage.unavailable .camera-status-dot,
+  #dashboard-controls[data-camera-state="unavailable"] .control-live-dot {
+    background: #e5484d; box-shadow: 0 0 0 4px rgba(229, 72, 77, 0.13);
+  }
+  #dashboard-controls[data-camera-state="live"] .control-live-dot {
+    background: #35c46a; box-shadow: 0 0 0 4px rgba(53, 196, 106, 0.13);
+  }
+  #dashboard-controls[data-camera-state="disabled"] .control-live-dot {
+    background: #737b87; box-shadow: 0 0 0 4px rgba(115, 123, 135, 0.12);
+  }
+  #camera-status strong { display: block; font-size: 14px; line-height: 1.2; }
+  #camera-status span:last-child { display: block; margin-top: 3px; color: var(--meta); font-size: 12px; }
+  body.overlay-only #camera-stage { display: none; }
+
+  /* Compact browser controls appear on pointer movement and disappear again. In a
+     passive OBS source they fade completely, leaving only the camera and telemetry. */
+  #dashboard-controls {
+    position: fixed; z-index: 30; top: 24px; right: 24px;
+    width: 330px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+    opacity: 1; transform: translateY(0);
+    transition: opacity 0.22s ease, transform 0.22s ease;
+  }
+  #dashboard-controls.idle:not(.open) {
+    opacity: 0; transform: translateY(-6px); pointer-events: none;
+  }
+  body.controls-disabled #dashboard-controls { display: none; }
+  #controls-handle, #controls-panel, .control-action, #room-toggle {
+    font-family: inherit; color: #fff;
+  }
+  #controls-handle {
+    display: inline-flex; align-items: center; gap: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 999px;
+    padding: 10px 14px; color: #eef0f4; background: rgba(10, 11, 14, 0.72);
+    backdrop-filter: blur(12px); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+    font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    cursor: pointer;
+  }
+  #controls-handle:hover, #controls-handle:focus-visible { background: rgba(25, 27, 32, 0.9); outline: none; }
+  #controls-panel {
+    width: 100%; padding: 16px; visibility: hidden; opacity: 0; pointer-events: none;
+    transform: translateY(-5px) scale(0.985); transform-origin: top right;
+    border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 14px;
+    background: rgba(10, 11, 14, 0.88); backdrop-filter: blur(18px);
+    box-shadow: 0 18px 55px rgba(0, 0, 0, 0.4);
+    transition: opacity 0.18s ease, transform 0.18s ease, visibility 0.18s;
+  }
+  #dashboard-controls.open #controls-panel {
+    visibility: visible; opacity: 1; pointer-events: auto; transform: none;
+  }
+  .controls-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 13px; }
+  .controls-kicker { font: 700 10px 'IBM Plex Mono', monospace; letter-spacing: 0.12em; color: #9fa6b1; }
+  #controls-close {
+    width: 28px; height: 28px; padding: 0; border: 0; border-radius: 7px;
+    color: #cdd2da; background: transparent; font-size: 20px; line-height: 1; cursor: pointer;
+  }
+  #controls-close:hover, #controls-close:focus-visible { color: #fff; background: rgba(255, 255, 255, 0.09); outline: none; }
+  .control-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 14px;
+    padding: 12px 0; border-top: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  .control-copy { min-width: 0; }
+  .control-label { display: block; color: #aeb5c0; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
+  .control-value { display: block; margin-top: 3px; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .control-action {
+    flex: 0 0 auto; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 8px;
+    padding: 7px 10px; background: rgba(255, 255, 255, 0.07); font-size: 11px; font-weight: 600; cursor: pointer;
+  }
+  .control-action:hover, .control-action:focus-visible { background: rgba(255, 255, 255, 0.14); outline: none; }
+  .control-action:disabled { opacity: 0.42; cursor: default; }
+  #room-toggle {
+    width: 100%; border: 0; text-align: left; background: transparent; cursor: pointer;
+  }
+  .switch-rail {
+    position: relative; width: 38px; height: 22px; flex: 0 0 38px;
+    border-radius: 999px; background: #363a43; transition: background 0.18s ease;
+  }
+  .switch-knob {
+    position: absolute; top: 3px; left: 3px; width: 16px; height: 16px;
+    border-radius: 50%; background: #dfe3e9; transition: transform 0.18s ease;
+  }
+  #room-toggle[aria-pressed="true"] .switch-rail { background: #ff8a3d; }
+  #room-toggle[aria-pressed="true"] .switch-knob { transform: translateX(16px); background: #fff; }
+  .controls-foot { margin-top: 10px; color: #858d99; font-size: 10px; line-height: 1.45; }
+  .controls-legal { margin-top: 7px; color: #858d99; font-size: 10px; line-height: 1.45; }
+  .controls-legal a { color: #c8ced7; text-decoration: underline; text-underline-offset: 2px; }
+  .controls-legal a:hover, .controls-legal a:focus-visible { color: #fff; outline: none; }
+
+  /* Per-state accent: strip fill, pill background, big percent, bar fill. */
+  #card[data-state="PRINTING"] { --accent: #ff8a3d; }
+  #card[data-state="PAUSED"]   { --accent: #f5a623; }
+  #card[data-state="FINISHED"] { --accent: #35c46a; }
+  #card[data-state="ERROR"]    { --accent: #e5484d; }
+  #card[data-state="BUSY"]     { --accent: #7c86ff; }
+  #card[data-state="IDLE"], #card[data-state="UNKNOWN"] { --accent: #4a505a; }
+  /* Non-print operations reuse the lifecycle shell without pretending to be a print. */
+  #card.activity { --accent: #7c86ff; }
+  #card.activity[data-activity="HOMING"] { --accent: #5bb8ff; }
+  #card.activity[data-activity="FILAMENT_LOAD"],
+  #card.activity[data-activity="FILAMENT_UNLOAD"] { --accent: #ffb454; }
+  #card.activity[data-activity="MAINTENANCE"] { --accent: #56c7b7; }
+
+  #card {
+    position: fixed;
+    z-index: 20;
+    left: 0; right: 0; bottom: 0;
+    width: 100vw;
+    height: min(250px, 100vh);
+    background: var(--card-bg);
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.45);
+    overflow: hidden;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+  }
+  #card.ready { opacity: 1; }
+
+  /* 5px lifecycle strip pinned to the very top; #body centres below it. */
+  #strip { position: absolute; top: 0; left: 0; right: 0; height: 5px; background: #22252b; }
+  #strip-fill { height: 100%; width: 0%; background: var(--accent); transition: width 0.6s linear; }
+  #body {
+    height: min(250px, 100vh);              /* retain the proven compact OBS layout */
+    min-height: 0;
+    display: flex; flex-direction: column; justify-content: center; gap: 15px;
+    padding: 21px 30px 18px;              /* top padding leaves room for the strip */
+  }
+  /* Printer disconnected: keep the last-known data visible but grayed + dimmed. */
+  #card.offline #thumb-box,
+  #card.offline #progress,
+  #card.offline .statrow,
+  #card.offline .title-row {
+    filter: grayscale(1);
+    opacity: 0.68;
+    transition: opacity 0.3s ease, filter 0.3s ease;
+  }
+  #card.offline #strip-fill { background: #e5484d; }
+  #offline-tag { display: none; }
+  #card.offline #offline-tag {
+    display: inline-flex; align-items: center; gap: 5px;
+    color: #ff7a7a; font-weight: 600;
+  }
+  #offline-tag::before {
+    content: ""; width: 7px; height: 7px; border-radius: 50%;
+    background: #e5484d; animation: pulse 1.2s ease-in-out infinite;
+  }
+  #card.offline #stateline-normal { display: none; }
+
+  /* === Header: thumbnail + name/pill/meta + big percent + fat bar ========== */
+  .top { display: flex; align-items: center; gap: 20px; min-width: 0; }
+  .header { display: flex; gap: 18px; align-items: center; position: relative; flex: 0 1 auto; min-width: 0; }
+  #thumb-box {
+    width: 62px; height: 62px; flex: 0 0 62px;
+    border-radius: 10px; overflow: hidden;
+    background: repeating-linear-gradient(45deg, #1e2127 0 7px, #171a1f 7px 14px);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    display: flex; align-items: center; justify-content: center;
+  }
+  #card[data-state="IDLE"] #thumb-box { background: #131519; border-style: dashed; }
+  #thumb { width: 100%; height: 100%; object-fit: cover; display: block; }
+  #thumb.hidden { display: none; }
+  #thumb-ph { font: 600 10px 'IBM Plex Mono', monospace; color: #8b93a0; }
+  #thumb:not(.hidden) + #thumb-ph { display: none; }
+  .titles { display: flex; flex-direction: column; min-width: 0; gap: 5px; }
+  .title-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  #name {
+    font-size: 29px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.05; color: #fff;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #pill {
+    flex: 0 0 auto;
+    font: 700 11px 'IBM Plex Mono', monospace; letter-spacing: 0.06em;
+    color: #0e0f12; background: var(--accent);
+    padding: 3px 9px; border-radius: 5px; white-space: nowrap;
+  }
+  /* Idle gray needs light text; ERROR keeps the dark face for accessible contrast on red. */
+  #card[data-state="IDLE"] #pill, #card[data-state="UNKNOWN"] #pill { color: #e6e9ee; }
+  #stateline { font-size: 16px; font-weight: 500; color: var(--meta); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #stateline .hi { color: #fff; }
+  #stale-dot {
+    position: absolute; top: -4px; right: -4px;
+    width: 12px; height: 12px; border-radius: 50%;
+    background: #f5a623; display: none;
+  }
+  #card.stale #stale-dot { display: block; animation: pulse 1.4s ease-in-out infinite; }
+  #card.dead #stale-dot { background: #e5484d; display: block; }
+
+  #progress { flex: 1; min-width: 340px; display: flex; flex-direction: column; gap: 9px; padding-left: 24px; }
+  .pmeta { display: flex; justify-content: space-between; align-items: baseline; white-space: nowrap; }
+  #pct { font: 700 38px/1 'IBM Plex Mono', monospace; color: var(--accent); }
+  #pct .unit { font-size: 25px; }
+  /* IDLE/ERROR replace the percent with a word (READY / ERROR) in the Sans face. */
+  #pct.word { font: 700 28px/1.1 'IBM Plex Sans', sans-serif; letter-spacing: 0.04em; color: #8b93a0; }
+  #card[data-state="ERROR"] #pct.word { color: #e5484d; }
+  #card.activity #pct.word { color: var(--accent); }
+  #pmeta-right { font-size: 16px; font-weight: 500; color: var(--meta); overflow: hidden; text-overflow: ellipsis; }
+  #pmeta-right .hi { color: #fff; }
+  /* The track's background-image is a canvas render of the job's toolchange positions
+     (one faint tick per swap, drawn once per job); the fill covers ticks already passed. */
+  .track {
+    position: relative;
+    height: 16px; border-radius: 8px;
+    background-color: #22252b; background-size: 100% 100%;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    overflow: hidden;
+  }
+  #fill { height: 100%; width: 0%; background: var(--accent); border-radius: 8px; transition: width 0.6s linear; }
+  #track-hint {
+    display: none;
+    position: absolute; inset: 0;
+    align-items: center; justify-content: center;
+    font: 600 11px 'IBM Plex Mono', monospace; letter-spacing: 0.12em; color: #a4aab4;
+  }
+  .track.empty { background-color: #1a1c20; border-style: dashed; border-color: rgba(255, 255, 255, 0.16); }
+  /* !important beats the inline background-image, so a mounted-but-not-printing job
+     (ERROR/IDLE with the file still selected) can't leave stale swap ticks on the
+     dashed placeholder track. */
+  .track.empty { background-image: none !important; }
+  .track.activity-track { background-image: none !important; }
+  .track.empty #fill { display: none; }
+  .track.empty #track-hint { display: flex; }
+  #card.activity .track.empty { border-color: var(--accent); }
+  #card.activity .track.empty #track-hint { color: #e6e9ee; }
+
+  /* === Stat rows: hairline-divided columns, always visible ================= */
+  .statrow { display: flex; min-width: 0; }
+  .st { flex: 1; min-width: 0; padding: 2px 18px; border-left: 1px solid var(--hair); white-space: nowrap; }
+  .st:first-child { padding-left: 0; border-left: none; }
+  .st:last-child { padding-right: 0; }
+  .st .label {
+    display: block;
+    font: 600 12px 'IBM Plex Mono', monospace; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--label);
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .st .value {
+    display: block;
+    font: 600 25px/1.1 'IBM Plex Mono', monospace; color: #fff; margin-top: 6px;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .st .value.dim { color: var(--dim); }
+  .sub { font-size: 16px; color: var(--label); font-weight: 600; }
+  .sub.faint { color: var(--dim); }
+  /* Heating / cooling target arrows on the temp cells. */
+  .tgt { font-size: 16px; }
+  .tgt.up { color: #ff6a5d; animation: heatpulse 1.1s ease-in-out infinite; }
+  .tgt.down { color: #5bb8ff; animation: heatpulse 1.1s ease-in-out infinite; }
+  /* Chamber (Connect-only) latches after its first reading. Room (Netatmo) also latches,
+     but remains opt-in via the browser preference / ?room override. */
+  #chamber-stat, #room-stat { display: none; }
+  .statrow.has-chamber #chamber-stat, .statrow.has-room #room-stat { display: block; }
+  #material-stat { flex: 2; }
+  #material-stat .value { font: 600 19px/1.35 'IBM Plex Sans', sans-serif; }
+  #tool-stat { flex: 3; }
+
+  /* Tool label row: name on the left, a state badge on the right half
+     (swap in flight / upcoming toolchange / parked / idle). */
+  #tool-label { display: flex; align-items: center; gap: 8px; }
+  #tool-badge {
+    display: none;
+    font: 600 10px 'IBM Plex Mono', monospace; letter-spacing: 0.02em;
+    padding: 2px 7px; border-radius: 4px;
+    text-transform: none;
+  }
+  #tool-badge.show { display: inline-flex; }
+  #tool-badge.swap { background: var(--accent); color: #0e0f12; animation: swpblink 1.4s ease-in-out infinite; }
+  #tool-badge.calm { background: #4a505a; color: #e6e9ee; }
+  #tool-badge.next { background: rgba(255, 255, 255, 0.1); color: var(--meta); }
+
+  /* Tool: the INDX slot row from the design - per slot a spool cap, a funnel, and a
+     hanging filament strand tinted with the loaded spool (--slot, supplied by /api/state).
+     Slots explicitly marked unloaded render as dashed amber EMPTY ghosts. While printing the
+     active slot gets a highlight box and its strand extrudes; mid-swap it pulses. When
+     nothing is printing the box drops away (parked/idle, per the design). */
+  #tool { display: flex; gap: 12px; margin-top: 9px; }
+  #tool.swapping { animation: pulse 1.2s ease-in-out infinite; }
+  .slot {
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    padding: 4px 7px 3px; margin: -4px 0;   /* box space reserved always, so activation can't shift the row */
+    border: 1px solid transparent; border-radius: 7px;
+  }
+  .slot.active { background: rgba(255, 255, 255, 0.08); border-color: rgba(255, 255, 255, 0.34); }
+  .slot.swapping { animation: pulse 1.2s ease-in-out infinite; }
+  .slot .cap { width: 16px; height: 9px; background: #2a2d33; border: 1px solid rgba(255, 255, 255, 0.22); border-bottom: none; border-radius: 3px 3px 0 0; }
+  .slot.active .cap { background: #3a3f47; border-color: rgba(255, 255, 255, 0.42); }
+  .slot .funnel { width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 5px solid #33373e; }
+  .slot.active .funnel { border-top-color: #4a505a; }
+  .slot .strand { width: 3px; height: 11px; background: var(--slot, #c8c8c8); border-radius: 0 0 2px 2px; }
+  .slot.active .strand { animation: extrude 1s ease-in-out infinite alternate; }
+  .slot .n { font: 600 10px 'IBM Plex Mono', monospace; color: var(--label); margin-top: 1px; }
+  .slot.active .n { color: #fff; font-weight: 700; }
+  .slot .empty-tag { display: none; font: 600 7px 'IBM Plex Mono', monospace; letter-spacing: 0.04em; color: #ffb454; margin-top: -1px; }
+  .slot.empty .cap { background: transparent; border: 1px dashed rgba(255, 180, 84, 0.6); border-bottom: none; }
+  .slot.empty .funnel { border-top-color: #4a3a1a; }
+  .slot.empty .strand { width: 5px; height: 10px; background: transparent; border: 1px dashed rgba(255, 180, 84, 0.65); border-top: none; }
+  .slot.empty .n { color: #ffb454; font-weight: 700; }
+  .slot.empty .empty-tag { display: block; }
+  .slot.unknown .strand, .slot.unknown .cap, .slot.unknown .funnel { opacity: 0.48; }
+  #card[data-state="IDLE"] #tool, #card[data-state="UNKNOWN"] #tool { opacity: 0.82; }
+
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  @keyframes swpblink { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
+  @keyframes heatpulse { 0%,100% { opacity: 1; } 50% { opacity: 0.32; } }
+  @keyframes extrude { 0% { transform: translateY(-2px); } 100% { transform: translateY(3px); } }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+
+<div id="camera-stage" class="loading">
+  <img id="camera-feed" alt="" />
+  <div id="camera-status" role="status" aria-live="polite">
+    <span class="camera-status-dot"></span>
+    <div>
+      <strong id="camera-status-title">Connecting to camera</strong>
+      <span id="camera-status-detail">Waiting for the first frame…</span>
+    </div>
+  </div>
+</div>
+
+<div id="dashboard-controls" class="idle" data-camera-state="connecting">
+  <button id="controls-handle" type="button" aria-expanded="false" aria-controls="controls-panel">
+    <span class="control-live-dot"></span><span>Dashboard</span>
+  </button>
+  <div id="controls-panel" role="dialog" aria-label="Dashboard controls">
+    <div class="controls-head">
+      <span class="controls-kicker">LIVE VIEW</span>
+      <button id="controls-close" type="button" aria-label="Close dashboard controls">×</button>
+    </div>
+    <div class="control-row">
+      <div class="control-copy">
+        <span class="control-label">Camera</span>
+        <span class="control-value" id="control-camera-state">Connecting…</span>
+      </div>
+      <button id="camera-retry" class="control-action" type="button">Reconnect</button>
+    </div>
+    <button id="room-toggle" class="control-row" type="button" aria-pressed="false">
+      <span class="control-copy">
+        <span class="control-label">Room temperature</span>
+        <span class="control-value" id="room-toggle-note">Hidden</span>
+      </span>
+      <span class="switch-rail" aria-hidden="true"><span class="switch-knob"></span></span>
+    </button>
+    <div class="controls-foot" id="dashboard-mode-note">Camera mode follows the browser-source height.</div>
+    <div class="controls-legal">
+      <a id="source-link" href="/source" target="_blank" rel="noopener">Source &amp; AGPL license</a>
+      <span aria-hidden="true"> · </span><span>No warranty</span>
+    </div>
+  </div>
+</div>
+
+<div id="card" class="ready connecting" data-state="UNKNOWN">
+  <div id="strip"><div id="strip-fill"></div></div>
+  <div id="body">
+    <div class="top">
+      <div class="header">
+        <div id="thumb-box"><img id="thumb" class="hidden" alt="" /><span id="thumb-ph">model</span></div>
+        <div class="titles">
+          <div class="title-row"><span id="name">—</span><span id="pill">…</span></div>
+          <div id="stateline">
+            <span id="stateline-normal">connecting…</span>
+            <span id="offline-tag">Printer disconnected</span>
+          </div>
+        </div>
+        <div id="stale-dot"></div>
+      </div>
+
+      <div id="progress">
+        <div class="pmeta">
+          <span id="pct" class="tnum word">—</span>
+          <span id="pmeta-right" class="tnum"></span>
+        </div>
+        <div class="track empty"><div id="fill"></div><span id="track-hint">CONNECTING…</span></div>
+      </div>
+    </div>
+
+    <div class="statrow" id="stats1">
+      <div class="st">
+        <span class="label">Nozzle</span>
+        <span class="value tnum" id="temp">—</span>
+      </div>
+      <div class="st">
+        <span class="label">Bed</span>
+        <span class="value tnum" id="bed">—</span>
+      </div>
+      <div class="st" id="chamber-stat">
+        <span class="label">Chamber</span>
+        <span class="value tnum" id="chamber">—</span>
+      </div>
+      <div class="st" id="room-stat">
+        <span class="label">Room</span>
+        <span class="value tnum" id="room">—</span>
+      </div>
+      <div class="st" id="material-stat">
+        <span class="label">Material</span>
+        <span class="value" id="material">—</span>
+      </div>
+      <div class="st" id="tool-stat">
+        <span class="label" id="tool-label"><span>Tool · Filament</span><span id="tool-badge" class="tnum"></span></span>
+        <span id="tool"></span>
+      </div>
+    </div>
+
+    <div class="statrow" id="stats2">
+      <div class="st">
+        <span class="label">Speed</span>
+        <span class="value tnum" id="speed">—</span>
+      </div>
+      <div class="st">
+        <span class="label">Flow</span>
+        <span class="value tnum" id="flow">—</span>
+      </div>
+      <div class="st">
+        <span class="label">Layer</span>
+        <span class="value tnum" id="layer">—</span>
+      </div>
+      <div class="st" style="flex: 1.4">
+        <span class="label">Fan · Hotend</span>
+        <span class="value tnum" id="fanhotend">—</span>
+      </div>
+      <div class="st" style="flex: 1.2">
+        <span class="label">Swaps</span>
+        <span class="value tnum" id="swaps">—</span>
+      </div>
+      <div class="st" style="flex: 1.2">
+        <span class="label">Waste of total</span>
+        <span class="value tnum" id="waste">—</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var POLL_MS = 1000;
+  var STATE_TIMEOUT_MS = 2000;             // tolerate brief loopback stalls during bgcode decode
+  var PARAMS = new URLSearchParams(location.search);
+  var CAMERA_AUTO_MIN_HEIGHT = 600;        // 420px legacy overlay off, 1080px dashboard on
+  var ROOM_PREF_KEY = 'layer-relay.room-visible';
+
+  function queryFlag(name) {
+    if (!PARAMS.has(name)) return null;
+    var value = String(PARAMS.get(name) || '').trim().toLowerCase();
+    if (!value || value === '1' || value === 'true' || value === 'yes' || value === 'on') return true;
+    if (value === '0' || value === 'false' || value === 'no' || value === 'off') return false;
+    return null;
+  }
+
+  function storedRoomPreference() {
+    try {
+      return localStorage.getItem(ROOM_PREF_KEY) === '1';
+    } catch (e) { return false; }
+  }
+
+  var cameraOverride = queryFlag('camera');
+  var cameraAuto = window.innerHeight > CAMERA_AUTO_MIN_HEIGHT;
+  var CAMERA_ENABLED = cameraOverride == null ? cameraAuto : cameraOverride;
+  var controlsOverride = queryFlag('controls');
+  var CONTROLS_ENABLED = controlsOverride == null ? true : controlsOverride;
+  var roomOverride = queryFlag('room');
+  var ROOM_VISIBLE = roomOverride == null ? storedRoomPreference() : roomOverride;
+  var el = {};
+  ('card cameraStage cameraFeed cameraStatusTitle cameraStatusDetail dashboardControls controlsHandle ' +
+    'controlsClose controlCameraState cameraRetry roomToggle roomToggleNote dashboardModeNote ' +
+    'stripFill thumb thumbPh name pill offlineTag fill trackHint pct pmetaRight temp bed chamber room stats1 ' +
+    'material tool toolBadge speed flow layer fanhotend swaps waste').split(' ').forEach(function (key) {
+      el[key] = document.getElementById(key.replace(/[A-Z]/g, function (c) { return '-' + c.toLowerCase(); }));
+    });
+  el.stateline = document.getElementById('stateline-normal');
+  el.track = document.querySelector('.track');
+  var S = { data: null, syncedAt: 0, failures: 0, lastThumbKey: null, zHist: [], lastPrint: null,
+            curTool: null, prevTool: null, toolChangedAt: null, swapStartedAt: null, prevSwapping: false,
+            jobmapKey: null, jobmapBusy: false, jobmapNextTry: 0, hasChamber: false, hasRoom: false,
+            showRoom: ROOM_VISIBLE, cameraState: CAMERA_ENABLED ? 'connecting' : 'disabled',
+            prevState: null, finishedClock: null, lastJob: null, completedKey: null,
+            offlineSince: null, pollSeq: 0, pollCtrl: null, pollTimer: null,
+            toolSlotsKey: null, toolSlotInfo: {} };
+  var KNOWN = { PRINTING: 1, PAUSED: 1, FINISHED: 1, ERROR: 1, IDLE: 1, BUSY: 1 };
+  var PILL = { PRINTING: 'PRINTING', PAUSED: 'PAUSED', FINISHED: '✓ DONE', IDLE: 'IDLE',
+               ERROR: 'ERROR', BUSY: 'BUSY', UNKNOWN: '…' };
+  var ACTIVITY = {
+    CALIBRATION:     { label: 'Calibrating printer', detail: 'Calibration in progress', pill: 'CALIBRATION', word: 'CALIBRATING' },
+    SELFTEST:        { label: 'Running printer self-test', detail: 'Checking printer systems', pill: 'SELF TEST', word: 'SELF TEST' },
+    HOMING:          { label: 'Homing axes', detail: 'Finding the printer origin', pill: 'HOMING', word: 'HOMING' },
+    FILAMENT_LOAD:   { label: 'Loading filament', detail: 'Feeding filament into the selected tool', pill: 'FILAMENT LOAD', word: 'LOADING' },
+    FILAMENT_UNLOAD: { label: 'Unloading filament', detail: 'Removing filament from the selected tool', pill: 'FILAMENT UNLOAD', word: 'UNLOADING' },
+    MAINTENANCE:     { label: 'Printer maintenance', detail: 'Maintenance operation in progress', pill: 'MAINTENANCE', word: 'MAINTENANCE' },
+    OPERATION:       { label: 'Printer busy', detail: 'Operation in progress', pill: 'BUSY', word: 'BUSY' },
+  };
+
+  function normalizeActivity(raw, st) {
+    if (raw && typeof raw === 'object' && raw.active === false) raw = null;
+    if (!raw && st !== 'BUSY') return null;
+    var source = raw && typeof raw === 'object' ? raw : {};
+    var plain = typeof raw === 'string' ? raw.trim() : '';
+    var rawKind = source.kind || source.type || (plain && plain.toUpperCase());
+    var kind = String(rawKind || 'OPERATION').trim().toUpperCase().replace(/[\s-]+/g, '_');
+    if (!ACTIVITY[kind]) kind = 'OPERATION';
+    var defaults = ACTIVITY[kind];
+    var label = typeof source.label === 'string' && source.label.trim() ? source.label.trim() :
+      (plain && !ACTIVITY[plain.toUpperCase()] ? plain : defaults.label);
+    var detail = typeof source.detail === 'string' && source.detail.trim() ? source.detail.trim() : defaults.detail;
+    var progress = source.progress == null || source.progress === '' ? null : Number(source.progress);
+    if (!isFinite(progress)) progress = null;
+    if (progress != null) progress = Math.min(100, Math.max(0, progress));
+    return { kind: kind, label: label, detail: detail, pill: defaults.pill, word: defaults.word, progress: progress };
+  }
+
+  // Slot inventory is supplied by /api/state rather than baked into the presentation.
+  var slots = [];
+  function normalizeToolSlots(d) {
+    var raw = d && Array.isArray(d.toolSlots) ? d.toolSlots : [];
+    var requested = Math.round(Number(d && d.toolCount));
+    var count = Math.min(32, Math.max(8, isFinite(requested) ? requested : 0, raw.length));
+    var list = [], byLabel = {};
+    var active = d && d.toolLabel != null ? Math.round(Number(d.toolLabel)) : null;
+    if (!isFinite(active) || active < 1) active = null;
+    var liveMaterial = d && typeof d.material === 'string' && d.material.trim() ? d.material.trim() : null;
+    for (var i = 0; i < count; i++) {
+      var slot = raw[i];
+      var label = i + 1;
+      var info = slot ? {
+        label: label,
+        loaded: typeof slot.loaded === 'boolean' ? slot.loaded : null,
+        name: slot.name || null,
+        color: slot.color || null,
+      } : { label: label, loaded: raw.length ? false : null, name: null, color: null };
+      if (label === active && liveMaterial) {
+        info = Object.assign({}, info, { loaded: true, liveMaterial: liveMaterial });
+      }
+      list.push(info);
+      byLabel[label] = info;
+    }
+    return { list: list, byLabel: byLabel };
+  }
+
+  function configuredSlotName(slot) {
+    return slot && slot.name && String(slot.name).trim() || null;
+  }
+
+  function materialFamily(value) {
+    var s = value == null ? '' : String(value).toUpperCase();
+    var known = ['PETG', 'PCTG', 'PLA', 'ASA', 'ABS', 'PC', 'TPU', 'TPE', 'PVA', 'HIPS', 'NYLON', 'PA', 'PP', 'PEEK'];
+    for (var i = 0; i < known.length; i++) {
+      var re = new RegExp('(^|[^A-Z0-9])' + known[i] + '($|[^A-Z0-9])');
+      if (re.test(s)) return known[i] === 'NYLON' ? 'PA' : known[i];
+    }
+    return null;
+  }
+
+  function displayMaterial(slot, liveMaterial) {
+    var configured = configuredSlotName(slot);
+    var live = typeof liveMaterial === 'string' && liveMaterial.trim() ? liveMaterial.trim() : null;
+    if (!live) return configured;
+    if (!configured) return live;
+    var configuredFamily = materialFamily(configured);
+    var liveFamily = materialFamily(live);
+    // A live PLA/PETG/etc reading wins over stale slot config from a different family.
+    return configuredFamily && liveFamily && configuredFamily !== liveFamily ? live : configured;
+  }
+
+  function syncToolSlots(d) {
+    var normalized = normalizeToolSlots(d || {});
+    S.toolSlotInfo = normalized.byLabel;
+    var key = JSON.stringify(normalized.list);
+    if (key === S.toolSlotsKey) return;
+    S.toolSlotsKey = key;
+    var s = '';
+    for (var i = 0; i < normalized.list.length; i++) {
+      var info = normalized.list[i];
+      var stateClass = info.loaded === false ? ' empty' : info.loaded == null ? ' unknown' : '';
+      var title = configuredSlotName(info) || info.liveMaterial;
+      s += '<div class="slot' + stateClass + '"' +
+        (info.color ? ' style="--slot: ' + info.color + '"' : '') +
+        (title ? ' title="' + esc(title) + '"' : '') + '>' +
+        '<div class="cap"></div><div class="funnel"></div><div class="strand"></div>' +
+        '<div class="n">' + info.label + '</div><div class="empty-tag">EMPTY</div></div>';
+    }
+    el.tool.innerHTML = s;
+    var gs = el.tool.querySelectorAll('.slot');
+    slots = [];
+    for (var k = 0; k < gs.length; k++) slots[normalized.list[k].label] = gs[k];
+  }
+
+  syncToolSlots({ toolCount: 8 });
+
+  function setText(node, v) { if (node.textContent !== v) node.textContent = v; }
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
+  var cameraRetryTimer = null;
+  var cameraFailures = 0;
+  var cameraGeneration = 0;
+  var cameraStreamAttached = false;
+  var lastCameraStatus = null;
+  var controlsIdleTimer = null;
+  var controlsInteracting = false;
+  var lastControlsReveal = 0;
+  var cameraModeInitialized = false;
+  var cameraResizeTimer = null;
+
+  function setCameraUi(state, title, detail, controlText) {
+    S.cameraState = state;
+    el.cameraStage.classList.toggle('loading', state === 'connecting');
+    el.cameraStage.classList.toggle('ready', state === 'live');
+    el.cameraStage.classList.toggle('unavailable', state === 'unavailable');
+    el.dashboardControls.setAttribute('data-camera-state', state);
+    setText(el.cameraStatusTitle, title);
+    setText(el.cameraStatusDetail, detail);
+    setText(el.controlCameraState, controlText || title);
+  }
+
+  function detachCameraStream() {
+    ++cameraGeneration;
+    clearTimeout(cameraRetryTimer);
+    cameraRetryTimer = null;
+    el.cameraFeed.onload = null;
+    el.cameraFeed.onerror = null;
+    el.cameraFeed.removeAttribute('src');
+    el.cameraStage.classList.remove('has-frame');
+    cameraStreamAttached = false;
+  }
+
+  function applyCameraStatus(status) {
+    lastCameraStatus = status;
+    // An explicit disabled flag is authoritative. Closing the image subscriber here also
+    // guarantees a server-side config change cannot leave an unnecessary ffmpeg consumer.
+    if (status && status.enabled === false) {
+      detachCameraStream();
+      setCameraUi('unavailable', 'Camera disabled',
+        'The camera is disabled in the overlay server.', 'Disabled by server');
+      return;
+    }
+    // Missing fields and state request failures are deliberately conservative. The img
+    // subscriber stays attached so an in-place backend ffmpeg restart can resume frames.
+    if (!status || typeof status.enabled !== 'boolean' ||
+        typeof status.running !== 'boolean' || typeof status.online !== 'boolean') {
+      setCameraUi('connecting', 'Reconnecting camera',
+        'Waiting for camera status. Telemetry is still live.', 'Reconnecting…');
+      return;
+    }
+    if (!cameraStreamAttached) connectCamera(false);
+    if (!status.running) {
+      var restartIn = Number(status.restartInMs);
+      var restartDetail = isFinite(restartIn) && restartIn > 0 ?
+        'The camera worker will retry in ' + Math.max(1, Math.ceil(restartIn / 1000)) + 's.' :
+        'The camera worker is restarting.';
+      setCameraUi('connecting', 'Reconnecting camera',
+        restartDetail + ' Telemetry is still live.', 'Worker restarting…');
+    } else if (!status.online) {
+      setCameraUi('unavailable', 'Camera signal unavailable',
+        'The stream is connected and waiting for a fresh frame.', 'No fresh frame');
+    } else {
+      setCameraUi('live', 'Camera live', 'Video stream connected.', 'Live');
+    }
+  }
+
+  function connectCamera(manual) {
+    if (!CAMERA_ENABLED) return;
+    if (lastCameraStatus && lastCameraStatus.enabled === false) {
+      applyCameraStatus(lastCameraStatus);
+      return;
+    }
+    if (cameraStreamAttached || manual) detachCameraStream();
+    clearTimeout(cameraRetryTimer);
+    cameraRetryTimer = null;
+    if (manual) cameraFailures = 0;
+    var generation = ++cameraGeneration;
+    cameraStreamAttached = true;
+    if (!lastCameraStatus) {
+      setCameraUi('connecting', manual ? 'Reconnecting camera' : 'Connecting to camera',
+        'Waiting for camera status and the first frame…', manual ? 'Reconnecting…' : 'Connecting…');
+    }
+
+    el.cameraFeed.onload = function () {
+      if (generation !== cameraGeneration) return;
+      clearTimeout(cameraRetryTimer);
+      cameraRetryTimer = null;
+      cameraFailures = 0;
+      el.cameraStage.classList.add('has-frame');
+      // The image event proves that pixels arrived, but /api/state remains the
+      // authority for the live badge. Missing status therefore stays "reconnecting".
+      applyCameraStatus(lastCameraStatus);
+    };
+    el.cameraFeed.onerror = function () {
+      if (generation !== cameraGeneration) return;
+      cameraFailures++;
+      var delay = Math.min(30000, 2000 * Math.pow(2, Math.min(4, cameraFailures - 1)));
+      var seconds = Math.round(delay / 1000);
+      detachCameraStream();
+      if (lastCameraStatus && lastCameraStatus.enabled === false) {
+        applyCameraStatus(lastCameraStatus);
+        return;
+      }
+      setCameraUi('connecting', 'Reconnecting camera stream',
+        'Telemetry is still live. Retrying in ' + seconds + 's…',
+        'Stream retry in ' + seconds + 's');
+      cameraRetryTimer = setTimeout(function () { connectCamera(false); }, delay);
+    };
+    el.cameraFeed.src = '/api/camera.mjpeg?overlay=1&_=' + Date.now();
+  }
+
+  function stopCamera() {
+    detachCameraStream();
+    lastCameraStatus = null;
+  }
+
+  function syncRoomPreference() {
+    var shown = !!S.showRoom && !!S.hasRoom;
+    el.stats1.classList.toggle('has-room', shown);
+    el.roomToggle.setAttribute('aria-pressed', S.showRoom ? 'true' : 'false');
+    setText(el.roomToggleNote, S.showRoom ?
+      (S.hasRoom ? 'Shown in telemetry' : 'On · waiting for a reading') : 'Hidden');
+  }
+
+  function setRoomVisible(visible, persist) {
+    S.showRoom = !!visible;
+    if (persist) {
+      try { localStorage.setItem(ROOM_PREF_KEY, S.showRoom ? '1' : '0'); } catch (e) {}
+    }
+    syncRoomPreference();
+  }
+
+  function scheduleControlsIdle(delay) {
+    clearTimeout(controlsIdleTimer);
+    controlsIdleTimer = null;
+    if (!CONTROLS_ENABLED || controlsInteracting) return;
+    controlsIdleTimer = setTimeout(function () {
+      if (controlsInteracting) return;
+      el.dashboardControls.classList.remove('open');
+      el.controlsHandle.setAttribute('aria-expanded', 'false');
+      el.dashboardControls.classList.add('idle');
+    }, delay == null ? 3500 : delay);
+  }
+
+  function revealControls() {
+    if (!CONTROLS_ENABLED) return;
+    el.dashboardControls.classList.remove('idle');
+    scheduleControlsIdle(el.dashboardControls.classList.contains('open') ? 10000 : 3500);
+  }
+
+  function setControlsOpen(open) {
+    if (!CONTROLS_ENABLED) return;
+    el.dashboardControls.classList.toggle('open', !!open);
+    el.controlsHandle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    el.dashboardControls.classList.remove('idle');
+    scheduleControlsIdle(open ? 10000 : 3500);
+  }
+
+  function syncCameraMode(enabled) {
+    enabled = !!enabled;
+    var changed = !cameraModeInitialized || CAMERA_ENABLED !== enabled;
+    CAMERA_ENABLED = enabled;
+    cameraModeInitialized = true;
+    document.body.classList.toggle('overlay-only', !enabled);
+    el.cameraRetry.disabled = !enabled;
+
+    var height = Math.round(window.innerHeight || 0);
+    if (cameraOverride === true) {
+      setText(el.dashboardModeNote, 'Camera forced on by ?camera=1.');
+    } else if (cameraOverride === false) {
+      setText(el.dashboardModeNote, 'Transparent overlay mode · ?camera=0.');
+    } else if (enabled) {
+      setText(el.dashboardModeNote, 'Camera on · ' + height + 'px dashboard layout.');
+    } else {
+      setText(el.dashboardModeNote, 'Camera off · ' + height + 'px legacy overlay layout.');
+    }
+    if (!changed) return;
+
+    if (enabled) {
+      S.cameraState = 'connecting';
+      connectCamera(false);
+    } else {
+      stopCamera();
+      var disabledDetail = cameraOverride === false ?
+        'Transparent overlay mode is active.' :
+        'The legacy 420px layout stays camera-free.';
+      setCameraUi('disabled', 'Camera disabled', disabledDetail,
+        cameraOverride === false ? 'Off · overlay mode' : 'Off · legacy viewport');
+    }
+  }
+
+  function initDashboard() {
+    document.body.classList.toggle('controls-disabled', !CONTROLS_ENABLED);
+    syncRoomPreference();
+    syncCameraMode(CAMERA_ENABLED);
+
+    el.cameraRetry.addEventListener('click', function () {
+      connectCamera(true);
+      revealControls();
+    });
+    el.roomToggle.addEventListener('click', function () {
+      setRoomVisible(!S.showRoom, true);
+      revealControls();
+    });
+    el.controlsHandle.addEventListener('click', function () {
+      setControlsOpen(!el.dashboardControls.classList.contains('open'));
+    });
+    el.controlsClose.addEventListener('click', function () { setControlsOpen(false); });
+    el.dashboardControls.addEventListener('pointerenter', function () {
+      controlsInteracting = true;
+      clearTimeout(controlsIdleTimer);
+      controlsIdleTimer = null;
+      revealControls();
+    });
+    el.dashboardControls.addEventListener('pointerleave', function () {
+      controlsInteracting = false;
+      scheduleControlsIdle(el.dashboardControls.classList.contains('open') ? 8000 : 2500);
+    });
+    el.dashboardControls.addEventListener('focusin', function () {
+      controlsInteracting = true;
+      revealControls();
+    });
+    el.dashboardControls.addEventListener('focusout', function () {
+      controlsInteracting = false;
+      scheduleControlsIdle(el.dashboardControls.classList.contains('open') ? 8000 : 2500);
+    });
+    document.addEventListener('pointermove', function () {
+      var now = Date.now();
+      if (now - lastControlsReveal < 180) return;
+      lastControlsReveal = now;
+      revealControls();
+    });
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape') setControlsOpen(false);
+      else if (event.key === 'Tab') revealControls();
+    });
+    window.addEventListener('resize', function () {
+      if (cameraOverride != null) return;
+      clearTimeout(cameraResizeTimer);
+      cameraResizeTimer = setTimeout(function () {
+        syncCameraMode(window.innerHeight > CAMERA_AUTO_MIN_HEIGHT);
+      }, 250);
+    });
+  }
+
+  function fmtEta(s) {
+    if (s == null) return '—';
+    s = Math.max(0, Math.round(s));
+    var h = (s / 3600) | 0, m = ((s % 3600) / 60) | 0, sec = s % 60;
+    if (h) return h + 'h' + String(m).padStart(2, '0') + 'm';
+    return String(m).padStart(2, '0') + 'm' + String(sec).padStart(2, '0') + 's';
+  }
+
+  function fmtClock(dt) {
+    return String(dt.getHours()).padStart(2, '0') + ':' + String(dt.getMinutes()).padStart(2, '0');
+  }
+
+  function clockFromTimestamp(value) {
+    if (value == null || value === '') return null;
+    if (typeof value === 'string' && /^\d\d:\d\d$/.test(value)) return value;
+    var n = typeof value === 'number' ? value : Number(value);
+    var dt = isFinite(n) ? new Date(n < 1e12 ? n * 1000 : n) : new Date(value);
+    return isNaN(dt.getTime()) ? null : fmtClock(dt);
+  }
+
+  // Restore the completion summary after OBS refreshes/recreates the browser source.
+  // Canonical fields come from d.completedJob; aliases keep rolling upgrades harmless.
+  function hydrateCompletedJob(d, st) {
+    var c = d && d.completedJob;
+    if (!c || typeof c !== 'object') return;
+    if (st === 'FINISHED' && d.name && c.name && d.name !== c.name) return;
+    var key = c.jobKey || [c.name, c.finishedAt || c.completedAt, c.timeElapsedSec || c.elapsed].join('|');
+    if (key === S.completedKey) return;
+    S.completedKey = key;
+    var finishedClock = clockFromTimestamp(c.finishedAt != null ? c.finishedAt :
+      (c.completedAt != null ? c.completedAt : c.finishedClock));
+    var elapsed = c.timeElapsedSec != null ? c.timeElapsedSec : c.elapsed;
+    var swaps = c.swapsTotal != null ? c.swapsTotal :
+      (c.swaps != null ? c.swaps : c.swapsDone);
+    var waste = c.wasteTotal != null ? c.wasteTotal :
+      (c.waste != null ? c.waste : c.wasteDone);
+    S.lastPrint = {
+      elapsed: elapsed,
+      filamentG: c.filamentG,
+      swaps: swaps,
+      waste: waste,
+      totalLayers: c.totalLayers != null ? c.totalLayers : c.layers,
+      material: c.material || null,
+    };
+    if (c.name) S.lastJob = { name: c.name, at: finishedClock };
+    if (finishedClock) S.finishedClock = finishedClock;
+  }
+
+  function remainingSec() {
+    var d = S.data;
+    if (!d || d.timeRemainingSec == null) return null;
+    // Freeze the countdown when paused or when the printer feed is stale/disconnected.
+    if (d.state !== 'PRINTING' || S.disconnected) return d.timeRemainingSec;
+    var elapsed = (performance.now() - S.syncedAt) / 1000;
+    return Math.max(0, d.timeRemainingSec - elapsed);
+  }
+
+  // Wall-clock finish estimate, "~03:12", from the remaining-time countdown. Rounded to
+  // whole minutes so a coarse time_remaining feed can't flap the display around :30.
+  function doneClock() {
+    var rem = remainingSec();
+    if (rem == null) return null;
+    return '~' + fmtClock(new Date(Date.now() + Math.round(rem / 60) * 60000));
+  }
+
+  // Symmetric to remainingSec: climbs between polls while printing, frozen otherwise.
+  function elapsedSec() {
+    var d = S.data;
+    if (!d || d.timeElapsedSec == null) return null;
+    if (d.state !== 'PRINTING' || S.disconnected) return d.timeElapsedSec;
+    var since = (performance.now() - S.syncedAt) / 1000;
+    return d.timeElapsedSec + since;
+  }
+
+  // Meta line under the job name, per state.
+  function stateLabel(d, st) {
+    switch (st) {
+      case 'PRINTING': {
+        var done = doneClock();
+        return fmtEta(remainingSec()) + ' left' + (done ? ' · done ' + done : '');
+      }
+      case 'PAUSED':   return 'Paused' + (d.progress != null ? ' · ' + Math.floor(d.progress) + '%' : '');
+      case 'FINISHED': {
+        var lp = S.lastPrint || {};
+        var tt = d.timeElapsedSec != null ? d.timeElapsedSec : lp.elapsed;
+        return 'Finished' + (S.finishedClock ? ' ' + S.finishedClock : '') +
+          (tt != null ? ' · ' + fmtEta(tt) + ' total' : '');
+      }
+      case 'IDLE':     return S.lastJob ? '' : 'Ready';   // lastJob variant is HTML, set in render
+      case 'BUSY':     return 'Printer busy';
+      case 'ERROR':    return 'Printer error';
+      default:         return d.state ? String(d.state).toLowerCase() : 'connecting…';
+    }
+  }
+
+  // Write HTML only when it actually changed, tracked via a cache on the node rather than
+  // re-reading innerHTML (serialization can differ from what was set). Rewriting identical
+  // markup every render would recreate the child spans and restart their CSS animations
+  // each second, freezing the heating/cooling pulse at its first frame.
+  function setHTML(node, html) {
+    if (node._h === html) return;
+    node._h = html;
+    node.innerHTML = html;
+  }
+
+  // Temp readout with a directional target arrow: red ↗ while heating, blue ↘ while
+  // cooling, both pulsing. Only when off by more than 3° (avoids PID flicker).
+  function tempCell(node, temp, target) {
+    if (temp == null) { dashCell(node); return; }
+    node.classList.remove('dim');
+    var t = Math.round(temp);
+    if (target != null && Math.abs(temp - target) > 3) {
+      var up = target > temp;
+      setHTML(node, t + '°<span class="tgt ' + (up ? 'up' : 'down') + '" title="' +
+        (up ? 'heating up' : 'cooling down') + '"> ' + (up ? '↗' : '↘') + ' ' + Math.round(target) + '°</span>');
+    } else setHTML(node, t + '°');
+  }
+
+  // Dash a live-only stat out (idle / finished states) with the dim face.
+  function dashCell(node) { setHTML(node, '—'); node.classList.add('dim'); }
+  function liveCell(node, html) { node.classList.remove('dim'); setHTML(node, html); }
+
+  // Percent: whole number at 10%+, one decimal below, so small shares stay readable.
+  function fmtPct(n) { return (n >= 10 ? Math.round(n) : n.toFixed(1)) + '%'; }
+
+  function sameJobKey(left, right) {
+    return !!(left && right && String(left).toLowerCase() === String(right).toLowerCase());
+  }
+
+  // Progress-bar swap ticks: fetch the job's toolchange positions once per job (keyed by
+  // thumbnailKey == jobKey) and paint them into the track as a canvas background. The
+  // accent fill sits above the background, so passed ticks disappear as the print advances.
+  function drawTicks(pcts) {
+    if (!pcts.length) { el.track.style.backgroundImage = ''; return; }
+    // Render at the track's real layout width so the 1px ticks stay crisp instead of
+    // being stretched into smears (background-size is 100% 100%). Fallback for the
+    // pathological hidden-at-draw-time case.
+    var W = el.track.clientWidth || 1500, H = 16;
+    var c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    var ctx = c.getContext('2d');
+    ctx.fillStyle = 'rgba(255,255,255,0.28)';
+    // M73 progress is integer-resolution, so high-swap jobs pile many swaps onto one
+    // x column; draw each column once so the alpha doesn't stack to solid white.
+    var seen = {};
+    for (var i = 0; i < pcts.length; i++) {
+      var x = Math.round(pcts[i] / 100 * (W - 1));
+      if (seen[x]) continue;
+      seen[x] = 1;
+      ctx.fillRect(x, 3, 1, H - 6);
+    }
+    el.track.style.backgroundImage = 'url(' + c.toDataURL() + ')';
+  }
+
+  function ensureJobmap(d) {
+    // Only worth fetching once the analysis is in (swapsTotal set); re-fetch on job change.
+    if (S.jobmapBusy || d.swapsTotal == null || !d.thumbnailKey || sameJobKey(S.jobmapKey, d.thumbnailKey)) return;
+    // Throttle retries: while the server's analysis lags the new job (or the fetch fails),
+    // poll the map every few seconds instead of every render.
+    if (Date.now() < S.jobmapNextTry) return;
+    S.jobmapNextTry = Date.now() + 4000;
+    S.jobmapBusy = true;
+    fetch('/api/jobmap', { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw 0; return r.json(); })
+      .then(function (jm) {
+        // Ignore a map for a different job (analysis mid-switch); next poll retries.
+        if (!sameJobKey(jm.jobKey, d.thumbnailKey)) return;
+        S.jobmapKey = jm.jobKey;
+        drawTicks(jm.swapPcts || []);
+      })
+      .catch(function () {})
+      .finally(function () { S.jobmapBusy = false; });
+  }
+
+  function connectionState(d) {
+    var serverDown = S.failures >= 3;
+    var reportedOffline = !!d && d.online === false;
+    var staleSec = d && d.staleSec != null && isFinite(Number(d.staleSec)) ?
+      Math.max(0, Number(d.staleSec)) : null;
+    var now = performance.now();
+    if (reportedOffline) {
+      if (S.offlineSince == null) S.offlineSince = now;
+    } else if (d) {
+      S.offlineSince = null;
+    }
+    // A brand-new server has no last-good timestamp, so staleSec is null. Give that
+    // online:false frame the same eight-second grace as a normal stale feed.
+    var observedOfflineSec = S.offlineSince == null ? 0 : (now - S.offlineSince) / 1000;
+    var printerAge = staleSec != null ? staleSec : observedOfflineSec;
+    var telemetryStale = !!d && (reportedOffline || (staleSec != null && staleSec > 3));
+    var printerDown = !!d && ((staleSec != null && staleSec >= 8) ||
+      (reportedOffline && printerAge >= 8));
+    return {
+      serverDown: serverDown,
+      printerDown: printerDown,
+      disconnected: serverDown || printerDown,
+      stale: !serverDown && (S.failures > 0 || telemetryStale),
+      since: serverDown ? null : printerAge,
+    };
+  }
+
+  function render() {
+    var d = S.data;
+    var conn = connectionState(d);
+    var disconnected = conn.disconnected;
+    S.disconnected = disconnected;
+
+    var st = d && KNOWN[d.state] ? d.state : 'UNKNOWN';
+    var activity = normalizeActivity(d && d.activity, st);
+    // A stale activity payload must never override the print/error lifecycle.
+    if (st === 'PRINTING' || st === 'PAUSED' || st === 'FINISHED' || st === 'ERROR') activity = null;
+    if (el.card.getAttribute('data-state') !== st) el.card.setAttribute('data-state', st);
+    el.card.setAttribute('data-activity', activity ? activity.kind : '');
+    el.card.classList.toggle('activity', !!activity);
+    el.card.classList.toggle('offline', disconnected);
+    el.card.classList.toggle('stale', conn.stale);
+    el.card.classList.toggle('dead', disconnected);
+    el.card.classList.toggle('connecting', !d || (st === 'UNKNOWN' && !disconnected));
+    el.card.classList.add('ready');
+
+    // The HTML itself is already visible as CONNECTING. If the first state request fails,
+    // promote that shell to a useful server-offline card instead of returning transparent.
+    if (!d) {
+      if (disconnected) setText(el.offlineTag, 'Overlay server offline');
+      setText(el.trackHint, disconnected ? 'OVERLAY SERVER OFFLINE' : 'CONNECTING…');
+      el.track.classList.add('empty');
+      return;
+    }
+
+    hydrateCompletedJob(d, st);
+
+    // Remember the finish moment and the last job so IDLE can say "last job X at HH:MM".
+    // Stamped only on the PRINTING/PAUSED -> FINISHED edge: a reload mid-FINISHED or a
+    // FINISHED frame re-entered after an offline/UNKNOWN blip must not re-date the finish
+    // to "now". completedJob restores this edge-derived data after an OBS reload.
+    if (st === 'FINISHED' && !S.finishedClock &&
+        (S.prevState === 'PRINTING' || S.prevState === 'PAUSED')) {
+      S.finishedClock = fmtClock(new Date());
+    }
+    if (st === 'FINISHED' && d.name) {
+      S.lastJob = { name: d.name, at: S.finishedClock };
+    }
+    if (st === 'PRINTING' || st === 'PAUSED') S.finishedClock = null;
+    S.prevState = st;
+
+    var live = st === 'PRINTING' || st === 'PAUSED';
+    var fin = st === 'FINISHED';
+    var lp = S.lastPrint || {};
+
+    // Offline tag text: name the actual failure and roughly how long it's been out.
+    if (disconnected) {
+      setText(el.offlineTag, (conn.serverDown ? 'Overlay server offline' : 'Printer disconnected') +
+        (conn.since != null && conn.since >= 5 ? ' · ' + fmtEta(conn.since) : ''));
+    }
+
+    var displayName = (activity && activity.label) || d.name || (fin && S.lastJob && S.lastJob.name) ||
+      (st === 'IDLE' ? 'No active print' : '—');
+    setText(el.name, displayName);
+    setText(el.pill, activity ? activity.pill : PILL[st]);
+    // Meta line: the IDLE last-job variant needs markup (white job name), the rest is text.
+    if (activity) {
+      setHTML(el.stateline, esc(activity.detail));
+    } else if (st === 'IDLE' && S.lastJob) {
+      setHTML(el.stateline, 'Ready · last job <span class="hi">' + esc(S.lastJob.name) + '</span>' +
+        (S.lastJob.at ? ' at ' + S.lastJob.at : ''));
+    } else setHTML(el.stateline, esc(stateLabel(d, st)));
+
+    // Thumbnail: only (re)load when the job changes.
+    setText(el.thumbPh, activity ? 'printer' : st === 'IDLE' ? 'no job' : 'model');
+    if (d.thumbnailUrl && d.thumbnailKey && d.thumbnailKey !== S.lastThumbKey) {
+      S.lastThumbKey = d.thumbnailKey;
+      el.thumb.onerror = function () { el.thumb.classList.add('hidden'); };
+      el.thumb.onload = function () { el.thumb.classList.remove('hidden'); };
+      el.thumb.src = d.thumbnailUrl + '?j=' + encodeURIComponent(d.thumbnailKey);
+    } else if (!d.thumbnailUrl) {
+      el.thumb.classList.add('hidden');
+    }
+
+    // Progress strip + big readout + bar, per state. FINISHED forces 100% (the feed may
+    // report null/stale progress after the job ends), idle empties everything.
+    var activityHasProgress = !!activity && activity.progress != null;
+    var pct = activityHasProgress ? activity.progress :
+      (d.progress != null ? Math.min(100, Math.max(0, d.progress)) : 0);
+    if (fin) pct = 100;
+    var showBar = live || fin || activityHasProgress;
+    // An indeterminate operation gets a full accent strip but keeps the dashed track;
+    // determinate activity uses the ordinary progress treatment.
+    el.stripFill.style.width = (activity ? (activityHasProgress ? pct : 100) : (showBar ? pct : 0)) + '%';
+    el.fill.style.width = pct + '%';
+    el.track.classList.toggle('activity-track', !!activity);
+    el.track.classList.toggle('empty', !showBar);
+    el.pct.classList.toggle('word', !showBar);
+    if (showBar) {
+      setHTML(el.pct, Math.floor(pct) + '<span class="unit">%</span>');
+    } else setHTML(el.pct, activity ? activity.word :
+      (st === 'ERROR' ? 'ERROR' : st === 'UNKNOWN' ? '—' : 'READY'));
+    setText(el.trackHint, disconnected ?
+      (conn.serverDown ? 'OVERLAY SERVER OFFLINE' : 'WAITING FOR PRINTER') :
+      (activity ? activity.word + '…' :
+       st === 'ERROR' ? 'PRINTER ERROR' : st === 'UNKNOWN' ? 'CONNECTING…' : 'DROP A G-CODE TO START'));
+
+    // Right side of the percent line, per state.
+    if (activity) {
+      setHTML(el.pmetaRight, esc(activity.detail));
+    } else if (live) {
+      var parts = [];
+      if (d.filamentG != null && pct > 0) {
+        parts.push('<span class="hi">≈' + Math.round(d.filamentG * pct / 100) + '</span>&nbsp;g used');
+      }
+      var ela = elapsedSec(), rem = remainingSec();
+      if (ela != null) {
+        parts.push('<span class="hi">' + fmtEta(ela) + '</span> elapsed' +
+          (rem != null ? ' / <span class="hi">~' + fmtEta(ela + rem) + '</span> total' : ''));
+      }
+      setHTML(el.pmetaRight, parts.join(' · '));
+    } else if (fin) {
+      var fparts = [];
+      var fil = d.filamentG != null ? d.filamentG : lp.filamentG;
+      if (fil != null) fparts.push('<span class="hi">' + Math.round(fil) + '</span>&nbsp;g used');
+      var tt = d.timeElapsedSec != null ? d.timeElapsedSec : lp.elapsed;
+      if (tt != null) fparts.push('<span class="hi">' + fmtEta(tt) + '</span> total');
+      if (lp.swaps != null) fparts.push('<span class="hi">' + lp.swaps + '</span> swaps');
+      setHTML(el.pmetaRight, fparts.join(' · '));
+    } else {
+      setHTML(el.pmetaRight, st === 'IDLE' ? 'No job queued' : '');
+    }
+
+    // Temps are always live: the printer keeps reporting while cooling down after a job,
+    // which is exactly when the blue ↘ arrows earn their keep.
+    tempCell(el.temp, d.nozzleTemp, d.nozzleTarget);
+    // Idle bed reads "off" once it's cold with no target; nozzle gets an "idle" tag.
+    if (st === 'IDLE' && (d.bedTarget == null || d.bedTarget === 0) && d.bedTemp != null && d.bedTemp <= 35) {
+      liveCell(el.bed, '<span style="color:var(--dim)">off</span>');
+    } else tempCell(el.bed, d.bedTemp, d.bedTarget);
+    if (st === 'IDLE' && d.nozzleTemp != null && (d.nozzleTarget == null || d.nozzleTarget === 0) && d.nozzleTemp <= 40) {
+      liveCell(el.temp, Math.round(d.nozzleTemp) + '°<span class="sub faint"> idle</span>');
+    }
+
+    // Chamber temperature: Connect-only telemetry, so the whole column stays hidden
+    // until the printer reports one. Latched for the session once seen: a dropped frame
+    // (server restart, Connect hiccup) must not reflow the band on stream.
+    if (d.chamberTemp != null) S.hasChamber = true;
+    el.stats1.classList.toggle('has-chamber', S.hasChamber);
+    if (d.chamberTemp != null) tempCell(el.chamber, d.chamberTemp, d.chamberTarget);
+    else if (S.hasChamber) dashCell(el.chamber);
+
+    // Ambient room temperature (Netatmo station): latch the sensor, then let the persisted
+    // browser preference decide whether its column joins the telemetry band.
+    if (d.roomTemp != null) S.hasRoom = true;
+    syncRoomPreference();
+    if (d.roomTemp != null) tempCell(el.room, d.roomTemp, null);
+    else if (S.hasRoom) dashCell(el.room);
+
+    // Progress-bar swap ticks: clear leftovers from the previous job, then (re)fetch
+    // the map once this job's analysis is available.
+    if (S.jobmapKey && !sameJobKey(S.jobmapKey, d.thumbnailKey)) { S.jobmapKey = null; drawTicks([]); }
+    ensureJobmap(d);
+
+    // Material and occupancy come from server-supplied slot inventory. When live telemetry
+    // identifies a different material family, prefer it over stale configured spool text.
+    syncToolSlots(d);
+    var activeLabel = d.toolLabel != null ? Math.round(Number(d.toolLabel)) : null;
+    if (!isFinite(activeLabel) || activeLabel < 1) activeLabel = null;
+    var slotInfo = activeLabel != null ? S.toolSlotInfo[activeLabel] : null;
+    var authoritativeMaterial = d.material || (fin ? lp.material : null);
+    var slotName = displayMaterial(slotInfo, authoritativeMaterial);
+    if (live) {
+      var mat = slotName || (d.analyzing ? '…' : '—');
+      liveCell(el.material, esc(mat));
+      el.material.classList.toggle('dim', mat === '—');
+    } else if (fin) {
+      var fmat = slotName || lp.material;
+      if (fmat) liveCell(el.material, esc(fmat)); else dashCell(el.material);
+    } else if (slotName && (!slotInfo || slotInfo.loaded !== false)) {
+      liveCell(el.material, esc(slotName) + ' <span class="sub faint">loaded</span>');
+    } else dashCell(el.material);
+
+    // Active tool on the slot row (toolLabel is 1-based, matching the slot numbers).
+    // The slot in use gets its highlight box while printing or during an explicit
+    // filament load/unload (parked/idle rows stay plain); mid-swap it pulses. A swap
+    // with no known target yet pulses the whole row instead.
+    var activityUsesTool = !!activity &&
+      (activity.kind === 'FILAMENT_LOAD' || activity.kind === 'FILAMENT_UNLOAD');
+    for (var ti = 1; ti < slots.length; ti++) {
+      if (!slots[ti]) continue;
+      slots[ti].classList.toggle('active', (live || activityUsesTool) && ti === activeLabel);
+      slots[ti].classList.toggle('swapping', ti === activeLabel && !!d.swapping);
+    }
+    el.tool.classList.toggle('swapping', !!d.swapping && activeLabel == null);
+
+    // Remember the previous tool so the swap-in-flight readout can show "2 → 5".
+    if (activeLabel != null && activeLabel !== S.curTool) {
+      S.prevTool = S.curTool;
+      S.curTool = activeLabel;
+      S.toolChangedAt = performance.now();
+    }
+    if (d.swapping && !S.prevSwapping) S.swapStartedAt = performance.now();
+    S.prevSwapping = !!d.swapping;
+    // Badge on the Tool label: swap in flight (accent, blinking), else the upcoming
+    // toolchange while printing, else parked/idle. The crater (swapping) and the label
+    // flip come from different feeds on different clocks, so only name the pair when the
+    // flip belongs to THIS swap window; before the label catches up the target is simply
+    // not known yet.
+    var badge = '', badgeCls = '';
+    if (d.swapping) {
+      var flipFresh = S.prevTool != null && S.toolChangedAt != null &&
+        S.swapStartedAt != null && S.toolChangedAt >= S.swapStartedAt - 5000;
+      badge = flipFresh ? '⇄ ' + S.prevTool + ' → ' + activeLabel : '⇄ SWAPPING';
+      badgeCls = 'swap';
+    } else if (st === 'PRINTING' && d.nextToolLabel != null) {
+      badge = 'NEXT ' + d.nextToolLabel;
+      badgeCls = 'next';
+    } else if (fin) {
+      badge = '■ PARKED';
+      badgeCls = 'calm';
+    } else if (st === 'IDLE') {
+      badge = 'IDLE';
+      badgeCls = 'calm';
+    }
+    setText(el.toolBadge, badge);
+    el.toolBadge.className = 'tnum' + (badge ? ' show ' + badgeCls : '');
+
+    // Speed / flow overrides, percentages straight off the printer; live-only.
+    if (live && d.speed != null) liveCell(el.speed, Math.round(d.speed) + '<span class="sub">%</span>');
+    else dashCell(el.speed);
+    if (live && d.flow != null) liveCell(el.flow, Math.round(d.flow) + '<span class="sub">%</span>');
+    else dashCell(el.flow);
+
+    // Layer counter from the gcode layer timeline (progress-based, so z-hops don't wobble
+    // it). currentLayer is 0 while heating/homing below layer 1 (falsy on purpose: show
+    // the Z fallback then). Until the analysis lands, fall back to the live Z height: the
+    // minimum of the last few readings (the true layer Z; hops only spike upward) at 0.1mm.
+    // FINISHED settles to total/total from the snapshot.
+    if (live) {
+      if (d.currentLayer && d.totalLayers != null) {
+        liveCell(el.layer, d.currentLayer + '<span class="sub">/' + d.totalLayers + '</span>');
+      } else if (d.axisZ != null) {
+        var z = S.zHist.length ? Math.min.apply(null, S.zHist) : d.axisZ;
+        liveCell(el.layer, z.toFixed(1) + '<span class="sub"> mm</span>');
+      } else if (d.analyzing) liveCell(el.layer, '…');
+      else dashCell(el.layer);
+    } else if (fin && lp.totalLayers != null) {
+      liveCell(el.layer, lp.totalLayers + '<span class="sub">/' + lp.totalLayers + '</span>');
+    } else if (fin && d.axisZ != null) {
+      // No snapshot to settle from (reloaded mid-FINISHED): show the live Z height,
+      // overlay.html's summary kept this readout and it tracks the gantry parking.
+      liveCell(el.layer, d.axisZ.toFixed(1) + '<span class="sub"> mm</span>');
+    } else dashCell(el.layer);
+
+    // Hotend fan, RPM: always live (still spinning while the hotend cools).
+    if (d.fanHotend != null) liveCell(el.fanhotend, Math.round(d.fanHotend) + '<span class="sub"> rpm</span>');
+    else dashCell(el.fanhotend);
+
+    // Swaps done / total; FINISHED settles to total/total.
+    if (live) {
+      if (d.swapsTotal != null) {
+        liveCell(el.swaps, (d.swapsDone != null ? d.swapsDone : '…') + '<span class="sub">/' + d.swapsTotal + '</span>');
+      } else if (d.analyzing) liveCell(el.swaps, '…');
+      else dashCell(el.swaps);
+    } else if (fin && lp.swaps != null) {
+      liveCell(el.swaps, lp.swaps + '<span class="sub">/' + lp.swaps + '</span>');
+    } else dashCell(el.swaps);
+
+    // Filament waste (purge) as a share of the total extruded filament: headline % + the
+    // purged grams beneath it. FINISHED shows the job's final figures from the snapshot.
+    var wg = null, wfil = null;
+    if (live && d.wasteTotal != null) {
+      wg = d.wasteDone != null ? d.wasteDone : d.wasteTotal;   // live so far, else job total
+      wfil = d.filamentG;
+    } else if (fin && lp.waste != null) {
+      wg = lp.waste;
+      wfil = lp.filamentG;
+    }
+    if (wg != null && wfil != null && wfil > 0) {
+      liveCell(el.waste, fmtPct(wg / wfil * 100) + '<span class="sub"> · ' + Math.round(wg) + ' g</span>');
+    } else if (wg != null) {
+      liveCell(el.waste, Math.round(wg) + '<span class="sub"> g</span>');
+    } else if (live && d.analyzing) liveCell(el.waste, '…');
+    else dashCell(el.waste);
+
+    // While printing, keep a snapshot of the final figures. The server clears the bgcode
+    // analysis the moment a job ends, so this is the only way the FINISHED bar can show
+    // its settled totals (time + filament also come from here as a fallback).
+    if (live) {
+      S.lastPrint = {
+        elapsed: d.timeElapsedSec,
+        filamentG: d.filamentG,
+        swaps: d.swapsTotal != null ? d.swapsTotal : d.swapsDone,
+        waste: d.wasteTotal != null ? d.wasteTotal : d.wasteDone,
+        totalLayers: d.totalLayers,
+        material: slotName || d.material || null,
+      };
+    }
+  }
+
+  function poll() {
+    // Every resync becomes the sole owner of the chain. Increment before aborting so the
+    // superseded request's catch/finally can identify itself and neither count a failure
+    // nor schedule a second timer. A genuine timeout from the current owner still counts.
+    clearTimeout(S.pollTimer);
+    S.pollTimer = null;
+    var seq = ++S.pollSeq;
+    if (S.pollCtrl) S.pollCtrl.abort();
+    var ctrl = new AbortController();
+    S.pollCtrl = ctrl;
+    var to = setTimeout(function () {
+      if (seq === S.pollSeq) ctrl.abort();
+    }, STATE_TIMEOUT_MS);
+    fetch('/api/state', { cache: 'no-store', signal: ctrl.signal })
+      .then(function (r) { if (!r.ok) throw 0; return r.json(); })
+      .then(function (j) {
+        if (seq !== S.pollSeq) return;
+        S.data = j; S.syncedAt = performance.now(); S.failures = 0;
+        if (CAMERA_ENABLED) applyCameraStatus(j.camera);
+        // Smoothing buffer for Z: keep the last few readings so render can reject z-hop spikes.
+        if (j.axisZ != null) { S.zHist.push(j.axisZ); if (S.zHist.length > 4) S.zHist.shift(); }
+      })
+      .catch(function () {
+        if (seq !== S.pollSeq) return;
+        S.failures++;
+        if (CAMERA_ENABLED) applyCameraStatus(null);
+      })
+      .finally(function () {
+        clearTimeout(to);
+        if (seq !== S.pollSeq) return;
+        S.pollCtrl = null;
+        try { render(); } catch (e) { console.error(e); }
+        S.pollTimer = setTimeout(poll, POLL_MS);
+      });
+  }
+
+  initDashboard();
+  setInterval(render, 1000);                 // smooth countdown between polls
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) {
+      poll();                                // resync instantly on OBS scene activation
+      if (CAMERA_ENABLED) {
+        if (!cameraStreamAttached && !(lastCameraStatus && lastCameraStatus.enabled === false)) {
+          connectCamera(true);
+        }
+      }
+    }
+  });
+  poll();
+})();
+</script>

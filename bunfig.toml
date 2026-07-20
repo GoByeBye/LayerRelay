@@ -1,0 +1,6 @@
+# Preserve explicit configuration and reproducible installs when running under Bun.
+env = false
+telemetry = false
+
+[install]
+auto = "disable"

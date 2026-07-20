@@ -1,0 +1,270 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+
+jobs:
+  test:
+    name: Bun 1.3.14 on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install dependencies
+        run: bun ci
+
+      - name: Check syntax
+        run: bun run check
+
+      - name: Validate Unix entry points
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh -n scripts/docker-entrypoint.sh
+
+          expect_usage() {
+            set +e
+            output="$("$@" 2>&1)"
+            status=$?
+            set -e
+            test "$status" -ne 0
+            grep -qi usage <<<"$output"
+          }
+
+          expect_usage bun tools/snapshot.mjs
+
+      - name: Parse the guarded Windows restart helper
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path tools/restart-overlay.ps1),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_ }
+            exit 1
+          }
+
+      - name: Run tests
+        run: bun test
+
+      - name: Smoke-test server startup and authentication
+        run: bun run smoke
+
+  gitleaks:
+    name: Full-history secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out complete repository history
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Scan Git history for secrets
+        run: >-
+          docker run --rm
+          --user "$(id -u):$(id -g)"
+          --volume "$PWD:/repo:ro"
+          ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+          git /repo --redact --verbose --no-color --log-opts="--all -m"
+
+  source:
+    name: Bun source archive
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
+
+      - name: Archive and validate the tracked release surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/layer-relay-source.tgz"
+          extract_dir="$RUNNER_TEMP/source-extract"
+          manifest="$RUNNER_TEMP/source-manifest.txt"
+          mkdir -p "$extract_dir" "$RUNNER_TEMP/doctor-data"
+
+          git archive --format=tar.gz --prefix=layer-relay/ --output="$archive" HEAD
+          tar -tzf "$archive" > "$manifest"
+          private_paths="$(grep -Ei '(^|/)(cache|captures|snapshots|node_modules|coverage|\.claude|\.codex|\.vscode|\.idea)/|(^|/)(config\.json|credentials\.json|client_secret[^/]*\.json|tokens\.json|\.npmrc|\.DS_Store|Thumbs\.db)$|(^|/)[^/]+\.(bgcode|log|mp4|webm|pem|key)$' "$manifest" || true)"
+          private_env="$(grep -Ei '(^|/)\.env($|\.)' "$manifest" | grep -Evi '/\.env\.example$' || true)"
+          private_assets="$(grep -Ei '(^|/)public/assets/' "$manifest" | grep -Evi '/public/assets/$|/public/assets/README\.md$' || true)"
+          unapproved_media="$(grep -Ei '(^|/)[^/]+\.(jpg|jpeg|png|webp)$' "$manifest" | grep -Evi '^layer-relay/docs/assets/banner\.webp$' || true)"
+          if [ -n "$private_paths$private_env$private_assets$unapproved_media" ]; then
+            echo "source archive contains a private or machine-local path" >&2
+            exit 1
+          fi
+          tar -xzf "$archive" -C "$extract_dir"
+
+          cd "$extract_dir/layer-relay"
+          bun ci
+          bun run check
+          bun test
+          bun run smoke
+          CONFIG_PATH="$RUNNER_TEMP/missing-config.json" \
+            DATA_DIR="$RUNNER_TEMP/doctor-data" \
+            PRINTER_HOST=127.0.0.1 \
+            PRINTER_USERNAME=ci \
+            PRINTER_PASSWORD=ci-password \
+            CAMERA_STREAM_ENABLED=false \
+            LISTEN_HOST=127.0.0.1 \
+            PORT=18788 \
+            bun run doctor
+
+  docker:
+    name: Docker build and runtime
+    needs:
+      - test
+      - gitleaks
+      - source
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Bun for host-side boundary checks
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
+
+      - name: Build image
+        run: >-
+          docker build --pull
+          --build-arg VCS_REF="$GITHUB_SHA"
+          --build-arg SOURCE_CODE_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/$GITHUB_SHA"
+          --tag layer-relay:local .
+
+      - name: Verify image source and license metadata
+        run: |
+          test "$(docker image inspect layer-relay:local --format '{{ index .Config.Labels "org.opencontainers.image.licenses" }}')" = "AGPL-3.0-or-later"
+          test "$(docker image inspect layer-relay:local --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$GITHUB_SHA"
+          test "$(docker image inspect layer-relay:local --format '{{ index .Config.Labels "org.opencontainers.image.source" }}')" = "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/$GITHUB_SHA"
+
+      - name: Prepare a locked-down config owned by a different UID
+        run: |
+          printf '%s\n' '{"printerHost":"127.0.0.1","username":"ci","password":"ci-password","cameraStreamEnabled":false}' > config.json
+          chmod 0600 config.json
+          sudo chown 12345:12345 config.json
+          test "$(stat -c %u:%g:%a config.json)" = "12345:12345:600"
+
+      - name: Run the hardened container
+        env:
+          OVERLAY_PORT: "18787"
+          SOURCE_CODE_URL: ${{ github.server_url }}/${{ github.repository }}/tree/${{ github.sha }}
+        run: |
+          docker compose up -d --no-build
+          container_id="$(docker compose ps -q overlay)"
+          test -n "$container_id"
+
+          status=starting
+          for attempt in $(seq 1 30); do
+            status="$(docker inspect --format '{{.State.Health.Status}}' "$container_id")"
+            if [ "$status" = healthy ]; then break; fi
+            if [ "$status" = unhealthy ]; then exit 1; fi
+            sleep 1
+          done
+          test "$status" = healthy
+
+          curl --fail --silent --show-error http://127.0.0.1:18787/healthz >/dev/null
+          test "$(curl --silent --output /dev/null --write-out '%{redirect_url}' http://127.0.0.1:18787/source)" = "$SOURCE_CODE_URL"
+          test "$(docker compose port overlay 8787)" = "127.0.0.1:18787"
+          docker compose exec -T overlay bun -e "const s=require('fs').readFileSync('/proc/1/status','utf8'); const uid=/^Uid:\\s+(\\d+)/m.exec(s)?.[1]; const caps=/^CapEff:\\s+([0-9a-f]+)/mi.exec(s)?.[1]; if(uid!=='1000'||!/^0+$/.test(caps||'')) { console.error({uid,caps}); process.exit(1); }"
+          docker compose exec -T overlay sh -ec 'test "$(stat -c %u:%g:%a "$CONFIG_PATH")" = "0:1000:440"'
+          docker compose exec -T --user bun:bun overlay sh -ec 'test -r "$CONFIG_PATH"; test -w "$DATA_DIR"; touch "$DATA_DIR/ci-write"; rm "$DATA_DIR/ci-write"; ! touch /app/ci-rootfs-write 2>/dev/null' # gitleaks:allow -- Compose user flag, not curl credentials
+
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' -X POST http://127.0.0.1:18787/api/state)" = 404
+
+      - name: Verify branded environment overrides in the container
+        run: |
+          docker run -d --rm --name layer-relay-env-override \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            --tmpfs /data:rw,nosuid,size=64m \
+            --cap-drop ALL \
+            --cap-add CHOWN \
+            --cap-add DAC_OVERRIDE \
+            --cap-add SETGID \
+            --cap-add SETUID \
+            --security-opt no-new-privileges:true \
+            --env LAYER_RELAY_PRINTER_HOST=127.0.0.1 \
+            --env LAYER_RELAY_PRINTER_USERNAME=ci \
+            --env LAYER_RELAY_PRINTER_PASSWORD=ci-password \
+            --env LAYER_RELAY_CAMERA_STREAM_ENABLED=false \
+            --env LAYER_RELAY_PORT=8788 \
+            --publish 127.0.0.1:18788:8788 \
+            layer-relay:local
+
+          status=starting
+          for attempt in $(seq 1 30); do
+            status="$(docker inspect --format '{{.State.Health.Status}}' layer-relay-env-override)"
+            if [ "$status" = healthy ]; then break; fi
+            if [ "$status" = unhealthy ]; then exit 1; fi
+            sleep 1
+          done
+          test "$status" = healthy
+          curl --fail --silent --show-error http://127.0.0.1:18788/healthz >/dev/null
+          curl --fail --silent --show-error http://127.0.0.1:18788/api/state >/dev/null
+          docker stop layer-relay-env-override >/dev/null
+
+      - name: Show container logs after a failure
+        if: failure()
+        run: docker compose logs --no-color overlay
+
+      - name: Clean up container test
+        if: always()
+        run: |
+          docker rm -f layer-relay-env-override 2>/dev/null || true
+          docker compose down -v --remove-orphans
+          rm -f config.json
