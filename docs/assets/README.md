@@ -1,5 +1,21 @@
 # Project artwork provenance
 
+## Dashboard screenshots
+
+Files: [dashboard-preview.webp](dashboard-preview.webp) and
+[overlay-preview.webp](overlay-preview.webp)
+
+- Captured: 2026-07-20 from the maintainer's live local LayerRelay dashboard
+- Source sizes: 1920 x 1080 and 1920 x 250
+- Published sizes: 167,152 bytes and 26,012 bytes
+- Post-processing: WebP encoding with Sharp at quality 82 for the camera
+  dashboard and quality 88 for the telemetry overlay; no compositional edits
+- Privacy: the captures contain printer-camera imagery and dashboard telemetry,
+  but no credentials, account tokens, printer address, or camera URL
+
+The screenshots document the project's own user interface and are distributed
+under the repository license with the maintainer's approval.
+
 ## README banner
 
 File: [banner.webp](banner.webp)

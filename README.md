@@ -20,6 +20,22 @@ That describes this project's behavior, not the authority of a Prusa web-client
 refresh token, which may carry broader account permissions; see the
 [Connect setup guide](docs/prusa-connect.md).
 
+## Screenshots
+
+<p align="center">
+  <a href="docs/assets/dashboard-preview.webp">
+    <img src="docs/assets/dashboard-preview.webp" width="960" alt="LayerRelay full dashboard showing the live printer camera and telemetry overlay">
+  </a>
+  <br><sub>Full 1920 × 1080 camera dashboard · click to open full size</sub>
+</p>
+
+<p align="center">
+  <a href="docs/assets/overlay-preview.webp">
+    <img src="docs/assets/overlay-preview.webp" width="960" alt="LayerRelay transparent lower-third telemetry overlay">
+  </a>
+  <br><sub>Camera-free telemetry overlay for OBS · click to open full size</sub>
+</p>
+
 ## What it shows
 
 - The printer camera, relayed from RTSP through one shared local MJPEG fanout
