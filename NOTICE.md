@@ -20,6 +20,23 @@ disclosure is informational: it does not change the project's
 disclosure is not a substitute for documenting the source and license of copied,
 adapted, generated, or vendored material.
 
+## FilamentColors.xyz data
+
+The optional filament picker queries the public
+[`FilamentColors.xyz`](https://filamentcolors.xyz/) API and normalizes a small
+subset of its swatch data for display. FilamentColors.xyz is created and
+maintained by Joe Kaufeld. Its production images, text, and data are licensed
+under the [Creative Commons Attribution 4.0 International license](https://creativecommons.org/licenses/by/4.0/).
+
+LayerRelay uses only the manufacturer, material, colour name, measured hex
+colour, stable swatch identifier, and detail-page slug returned for an explicit
+search. It does not redistribute the upstream image library or purchase links.
+Picker text is sent by the LayerRelay server to the FilamentColors.xyz API as a
+search query. Normalized suggestions and their bounded search terms are cached
+locally, may be unavailable, and are never required for manual tool
+configuration. Upstream data is normalized into LayerRelay's existing tool-slot
+shape; FilamentColors.xyz does not endorse LayerRelay.
+
 ## Prusa libbgcode provenance
 
 `bgcode.js` is a JavaScript/Node.js adaptation of parts of

@@ -14,8 +14,9 @@ The project is developed against a **Prusa CORE One with an INDX toolchanger**.
 Basic telemetry should be useful with other PrusaLink printers, but their state,
 camera, and G-code behavior still needs community testing.
 
-The service is display-only: it reads printer APIs with `GET` requests and has no
-pause, stop, movement, temperature, or upload controls.
+The printer integrations are display-only: they read printer APIs with `GET`
+requests and have no pause, stop, movement, temperature, or upload controls.
+The local dashboard can write only its own non-secret tool inventory.
 That describes this project's behavior, not the authority of a Prusa web-client
 refresh token, which may carry broader account permissions; see the
 [Connect setup guide](docs/prusa-connect.md).
@@ -42,6 +43,8 @@ refresh token, which may carry broader account permissions; see the
 - Print name and thumbnail, lifecycle state, progress, remaining time, and finish clock
 - Nozzle, bed, chamber, and room temperatures
 - Active tool, configured spool name/colour, and the next tool change
+- Automatic tool count and loaded/material inventory from Prusa Connect, with
+  optional per-field dashboard overrides and FilamentColors.xyz suggestions
 - Layer, speed, flow, hotend fan, tool-swap count, purge waste, and filament estimate
 - Tool-change ticks on the progress bar, decoded from the active `.bgcode`
 - Last-known values during a printer or cloud outage, visibly marked as stale/offline
@@ -61,7 +64,7 @@ refresh token, which may carry broader account permissions; see the
 | Camera | No | Integrated video requires a reachable `rtsp://` or `rtsps://` stream. Without one, telemetry and the transparent overlay still work and the camera relay remains off. |
 | FFmpeg | Camera relay/snapshot only | Native installs need FFmpeg at `cameraFfmpegPath` or on `PATH` for the relay and snapshot helper. The Docker image includes FFmpeg. |
 | OBS Studio | No | Needed only for an OBS Browser Source. No minimum OBS version is claimed. Use 1920 x 1080 for the full dashboard or 1920 x 420 for the camera-free lower third. A normal browser can display the dashboard without OBS. |
-| Network access | Yes | The host must reach PrusaLink and, when enabled, the RTSP camera. Prusa Connect and optional Netatmo integrations require outbound internet access. |
+| Network access | Yes | The host must reach PrusaLink and, when enabled, the RTSP camera. Prusa Connect, optional Netatmo, and optional filament suggestions require outbound internet access; manual tool editing remains usable without catalog access. Typed picker searches are sent by the server to FilamentColors.xyz. |
 
 Clone the repository and enter its directory first:
 
@@ -85,11 +88,21 @@ bun run start
 
 Setup creates the ignored `config.json` without overwriting an existing one. In
 an interactive terminal it asks for the PrusaLink credentials, optional RTSP
-URL, recommended Prusa Connect UUID and hidden refresh token, and tool count.
+URL, recommended Prusa Connect UUID and hidden refresh token, and an optional
+manual tool-count override. Leave the count on `auto` to follow Connect.
 
 Open <http://localhost:8787/> after startup. For a container install, use the
 [Docker guide](docs/docker.md); Compose publishes the service on host loopback
 by default.
+
+Move the pointer to reveal **Dashboard**, then choose **Tools & filament**.
+Tool count, loaded/empty state, and material follow Prusa Connect automatically
+when that inventory is available. Count, presence, name, and colour can be
+overridden independently; count, presence, and type can be returned to
+**Auto** later, while **Auto type** preserves the selected colour. Changes take
+effect without restarting the server. Filament suggestions are optional;
+custom names and colours remain usable when the external catalog is slow or
+unavailable.
 
 ## Configuration
 
@@ -104,7 +117,8 @@ The main settings are:
 | `listenHost` / `port` | Local HTTP listener. Keep `127.0.0.1` unless another machine must read the overlay. |
 | `pollIntervalMs` | Local PrusaLink cadence. `2000` is the safe default for the printer's Buddy board. |
 | `sourceCodeUrl` | Corresponding-source URL offered in the dashboard and HTTP `Link` header. Modified deployments must point it at their exact source. |
-| `toolCount` / `toolSlots` | Number of INDX docks and the currently loaded spool name/colour per 1-based slot. |
+| `toolCount` / `toolSlots` | Optional inventory overrides. `toolCount: null` and omitted slot fields follow Prusa Connect; explicit dashboard values persist in `DATA_DIR/tool-settings.json`. |
+| `toolSettingsAllowedOrigins` | Exact extra browser origins allowed to save tool settings through a named host or authenticated reverse proxy. Loopback and literal IP origins need no entry. |
 | `localBgcodeDirs` | Folders searched for a matching `.bgcode` before downloading it from the printer. |
 | `printNameOverrides` | Optional exact `jobKey` to display-name map for slicer files that expose only placeholders such as `Merged`. |
 | `connect*` | Recommended but experimental Prusa Connect UUID, rotating refresh token, and rate-limited poll cadence. Complete credentials enable it by default; review the service-terms boundary in the [setup guide](docs/prusa-connect.md). |
@@ -211,14 +225,19 @@ not an extrusion timeline.
 | `netatmo.js` | Optional Netatmo OAuth and station mapping |
 | `bgcode.js` | `.bgcode` container and G-code decoder |
 | `toolswaps.js` | Tool/swap/layer/waste timeline builder |
-| `public/overlay.html` | Self-contained overlay UI with no third-party requests |
+| `tool-settings.js` | Validated, immediately applied tool inventory persisted under `DATA_DIR` |
+| `filament-catalog.js` | Bounded, cached proxy for optional FilamentColors.xyz suggestions |
+| `public/overlay.html` | Self-contained overlay UI; browser requests remain same-origin |
 | `tools/` | Guarded restart, camera snapshot, and Connect token-display helpers |
 
-Read endpoints:
+HTTP endpoints:
 
 - `GET /healthz` — process liveness only; printer and camera outages do not fail it
 - `GET /source` — redirects to the configured corresponding source for the running deployment
 - `GET /api/state` — merged live state, connectivity, tool inventory, and completed job
+- `GET /api/settings/tools` — non-secret override, detected, and effective tool inventory layers
+- `PUT /api/settings/tools` — same-origin JSON update for only nullable count and per-field overrides
+- `GET /api/filaments?q=<text>` — optional cached filament suggestions; custom values never depend on it
 - `GET /api/camera.mjpeg` — long-lived shared MJPEG printer-camera stream
 - `GET /api/camera.jpg` — latest complete camera frame as a single JPEG
 - `GET /api/camera/status` — camera relay state, viewer count, frame age, configured/measured FPS, JPEG byte rate, restart timing, and credential-safe errors

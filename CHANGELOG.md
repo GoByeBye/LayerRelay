@@ -19,6 +19,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and license provenance recorded in the source tree
 - An explicit AI-assisted development disclosure and contribution policy
 - A CI gate that installs and verifies the exact tracked source archive
+- A dashboard tool-and-filament editor with Prusa Connect-derived automatic
+  inventory, independent count/presence/name/colour overrides, Auto reset for
+  count/presence/type, persistent settings, and optional FilamentColors.xyz
+  type-ahead suggestions
 
 ### Changed
 
@@ -41,6 +45,8 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Docker build context excludes local credentials, state, and scratch pages
 - Cloud asset downloads are restricted to authenticated same-origin Prusa Connect paths
+- Browser configuration writes are limited to the non-secret tool inventory,
+  use same-origin JSON requests, and never expose or rewrite operator credentials
 
 [Unreleased]: https://github.com/GoByeBye/LayerRelay/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/GoByeBye/LayerRelay/releases/tag/v0.1.0

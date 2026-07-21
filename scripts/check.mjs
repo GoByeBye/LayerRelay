@@ -70,12 +70,14 @@ for (const [setting, definition] of Object.entries(configSchema.properties)) {
   }
 }
 for (const [parent, properties] of [
-  ['toolSlots.<n>', configSchema.properties.toolSlots.patternProperties['^[1-9][0-9]*$'].properties],
+  ['toolSlots.<n>', configSchema.properties.toolSlots.patternProperties['^(?:[1-9]|[12][0-9]|3[0-2])$'].properties],
 ]) {
   const example = Object.values(configExample.toolSlots)[0];
   for (const setting of Object.keys(properties)) {
     requireConfigTableRow(`${parent}.${setting}`, 4);
-    if (!example || !Object.hasOwn(example, setting)) {
+    // An empty toolSlots object is the recommended automatic-Connect default.
+    // If an explicit example override is present, keep it complete.
+    if (example && !Object.hasOwn(example, setting)) {
       throw new Error(`config.example.json must include nested config setting: ${parent}.${setting}`);
     }
   }

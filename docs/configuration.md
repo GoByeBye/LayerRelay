@@ -73,8 +73,9 @@ modified container deployment.
 | `port` | integer 1–65535, `8787` | Non-secret | `8787` | Local HTTP port. |
 | `pollIntervalMs` | integer at least 250, `2000` | Non-secret | `2000` | Do not aggressively lower this; the printer board is resource constrained. |
 | `sourceCodeUrl` | HTTP(S) URL, project repository | Public | `"https://github.com/GoByeBye/LayerRelay"` | Dashboard source/license link and HTTP `Link` target. Modified deployments must use their exact source. |
-| `toolCount` | integer 1–32, `1` | Non-secret | `1` | Number of tool slots rendered. |
-| `toolSlots` | object, `{}` | Slot names may identify private inventory | `{"1":{"loaded":true,"name":"Example filament","color":"#ff8a3d"}}` | 1-based slot keys; nested fields are below. |
+| `toolCount` | `null` or integer 1–32, `null` | Non-secret | `null` | `null` follows the tool inventory inferred from Prusa Connect; an integer is a manual count override. |
+| `toolSettingsAllowedOrigins` | array of up to 16 exact HTTP(S) origins, `[]` | Non-secret | `["https://relay.example"]` | Extra named browser origins allowed to save tool settings. Loopback and literal IP origins are accepted automatically. Add only origins protected by your deployment boundary. |
+| `toolSlots` | object, `{}` | Slot names may identify private inventory | `{"1":{"loaded":true,"name":"Example filament","color":"#ff8a3d"}}` | Slot keys are integers from 1 through 32; nested fields are below. |
 | `printNameOverrides` | object of string values, `{}` | Identifying print names | `{"example.bgcode":"Demo vase"}` | Exact job-key to display-name replacements; values are at most 200 characters. |
 | `localBgcodeDirs` | array of non-empty strings, `[]` | Local paths may identify a machine | `["/srv/gcode"]` | Folders searched before downloading a job from the printer; mount container paths explicitly. |
 
@@ -86,9 +87,45 @@ modified container deployment.
 | `toolSlots.<n>.name` | string up to 80 characters, omitted | Identifying when customized | `"Example filament"` |
 | `toolSlots.<n>.color` | `#RRGGBB` string, omitted | Non-secret | `"#ff8a3d"` |
 
-Tool-slot keys are 1-based positive integers. When `loaded` is omitted, a slot
-with a configured name or colour is treated as loaded; otherwise its state is
-unknown.
+Tool-slot keys are integers from 1 through 32. Every nested field is an
+independent override: when `loaded`, `name`, or `color` is omitted, that field
+continues to follow Connect (or remains unknown when Connect has no value).
+Setting a name or colour does not imply that the slot is loaded.
+
+### Dashboard tool editor
+
+The browser dashboard edits only the `toolCount` and `toolSlots` override layer;
+it never reads, returns, or rewrites the credential-bearing configuration file.
+The settings view shows detected Connect values, saved overrides, and the
+server-resolved effective inventory separately. A successful save is validated,
+applied to `/api/state` immediately, and written atomically to
+`DATA_DIR/tool-settings.json`. An empty saved Auto snapshot takes precedence
+over `config.json`, so clearing an override remains cleared after restart.
+Keeping it under `DATA_DIR` also supports the supplied container's read-only
+configuration mount and read-only root filesystem.
+
+Connect tool keys determine the latest inferred count. Missing interior keys
+stay unknown rather than being treated as empty, while explicit empty material
+signals are rendered as unloaded. A successful inventory replaces the previous
+count so hardware changes can shrink or grow automatically. Incomplete top-level
+filament-only samples update the observed slot without collapsing an established
+multi-tool count. Failed polls retain the last-known cache, scoped to the
+configured printer UUID. LayerRelay never hides the currently active tool.
+
+Settings writes accept loopback and literal-IP browser hosts by default. For a
+named host or authenticated reverse proxy, add its exact browser origin (scheme,
+host, and optional non-default port, with no path) to
+`toolSettingsAllowedOrigins`. This explicit allowlist prevents DNS rebinding
+from turning an unrelated public hostname into a local settings writer.
+
+Text typed into a filament-name field is sent by the server through a bounded
+same-origin proxy to the
+public [FilamentColors.xyz API](https://github.com/itsthejoker/filamentcolors.xyz#public-api).
+Small normalized results and their bounded search terms may be cached under
+`DATA_DIR`; no upstream images or purchase links are stored. The catalog is
+optional and can be slow, unavailable, or change independently. Manual names
+and six-digit hex colours remain fully usable in every case. See
+[NOTICE.md](../NOTICE.md) for attribution and license details.
 
 ## Camera settings
 

@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'layer-relay-smoke-'));
 let child;
+let childOptions;
 
 async function freePort() {
   const probe = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response() });
@@ -48,16 +49,40 @@ async function stopChild() {
   }
 }
 
+function startChild() {
+  child = Bun.spawn([process.execPath, 'server.js'], childOptions);
+}
+
 try {
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
-  child = Bun.spawn([process.execPath, 'server.js'], {
+  const configPath = path.join(tempDir, 'config.json');
+  const dataDir = path.join(tempDir, 'data');
+  fs.writeFileSync(configPath, JSON.stringify({
+    printerHost: '127.0.0.1',
+    username: 'smoke',
+    password: 'smoke',
+    sourceCodeUrl: 'https://code.example/layer-relay/tree/smoke',
+    toolSettingsAllowedOrigins: [`http://relay.example:${port}`],
+  }));
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(path.join(dataDir, 'connect-tool-inventory.json'), JSON.stringify({
+    version: 2,
+    printerUuid: null,
+    toolCount: 3,
+    toolSlots: [
+      { toolIndex: 0, toolLabel: 1, loaded: true, name: null, material: 'PLA', color: null },
+      { toolIndex: 1, toolLabel: 2, loaded: false, name: null, material: null, color: null },
+      { toolIndex: 2, toolLabel: 3, loaded: null, name: null, material: null, color: null },
+    ],
+  }));
+  childOptions = {
     cwd: rootDir,
     windowsHide: true,
     env: {
       ...process.env,
-      CONFIG_PATH: path.join(tempDir, 'missing-config.json'),
-      DATA_DIR: path.join(tempDir, 'data'),
+      CONFIG_PATH: configPath,
+      DATA_DIR: dataDir,
       LISTEN_HOST: '127.0.0.1',
       PORT: String(port),
       PRINTER_HOST: '127.0.0.1',
@@ -67,7 +92,8 @@ try {
       SOURCE_CODE_URL: 'https://code.example/layer-relay/tree/smoke',
     },
     stdin: 'ignore', stdout: 'inherit', stderr: 'inherit',
-  });
+  };
+  startChild();
 
   await waitForHealth(baseUrl);
 
@@ -83,9 +109,113 @@ try {
   if (typeof state.updatedAt !== 'number' || typeof state.online !== 'boolean') {
     throw new Error('state endpoint returned an unexpected payload');
   }
-  if (state.toolCount !== 1 || state.toolSlots?.length !== 1 || state.toolSlots[0].loaded !== null ||
+  if (state.toolCount !== 3 || state.toolCountSource !== 'connect' || state.toolSlots?.length !== 3 ||
+      state.toolSlots[0].loaded !== true || state.toolSlots[0].material !== 'PLA' ||
+      state.toolSlots[1].loaded !== false || state.toolSlots[2].loaded !== null ||
+      state.toolSettings?.toolCount !== null || state.toolSettings?.detected?.status !== 'stale' ||
       state.camera?.enabled !== false) {
     throw new Error('state endpoint returned unexpected tool or camera status');
+  }
+
+  const initialToolsResponse = await fetch(`${baseUrl}/api/settings/tools`);
+  const initialToolsText = await initialToolsResponse.text();
+  const initialTools = JSON.parse(initialToolsText);
+  if (!initialToolsResponse.ok || initialTools.toolCount !== null || initialTools.effective?.toolCount !== 3 ||
+      initialTools.effective?.toolCountSource !== 'connect' || initialTools.detected?.status !== 'stale' ||
+      /password|refreshToken|cameraRtspUrl|configPath/i.test(initialToolsText)) {
+    throw new Error('tool settings endpoint exposed an unexpected payload');
+  }
+
+  const crossOriginWrite = await fetch(`${baseUrl}/api/settings/tools`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Origin: 'https://attacker.example' },
+    body: JSON.stringify({ toolCount: 2, toolSlots: {} }),
+  });
+  if (crossOriginWrite.status !== 403) throw new Error('cross-origin tool settings write was not rejected');
+
+  const reboundWrite = await fetch(`${baseUrl}/api/settings/tools`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      Host: `evil.example:${port}`,
+      Origin: `http://evil.example:${port}`,
+      'Sec-Fetch-Site': 'same-origin',
+    },
+    body: JSON.stringify({ toolCount: 2, toolSlots: {} }),
+  });
+  if (reboundWrite.status !== 403) throw new Error('DNS-rebound loopback settings write was not rejected');
+
+  const allowedProxyWrite = await fetch(`${baseUrl}/api/settings/tools`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      Host: `relay.example:${port}`,
+      Origin: `http://relay.example:${port}`,
+      'Sec-Fetch-Site': 'same-origin',
+    },
+    body: JSON.stringify({ toolCount: 1, toolSlots: {} }),
+  });
+  if (!allowedProxyWrite.ok) throw new Error('explicitly allowed proxy origin could not save tool settings');
+
+  const wrongContentType = await fetch(`${baseUrl}/api/settings/tools`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'text/plain', Origin: baseUrl },
+    body: '{}',
+  });
+  if (wrongContentType.status !== 415) throw new Error('non-JSON tool settings write was not rejected');
+
+  const savedToolsResponse = await fetch(`${baseUrl}/api/settings/tools`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Origin: baseUrl },
+    body: JSON.stringify({
+      toolCount: 2,
+      toolSlots: { 2: { loaded: true, name: 'Prusament PETG Galaxy Black', color: '#112233' } },
+    }),
+  });
+  const savedTools = await savedToolsResponse.json();
+  if (!savedToolsResponse.ok || savedTools.toolCount !== 2 || savedTools.toolSlots?.['2']?.color !== '#112233') {
+    throw new Error('valid tool settings were not saved');
+  }
+
+  const updatedState = await (await fetch(`${baseUrl}/api/state`)).json();
+  if (updatedState.toolCount !== 2 || updatedState.toolSlots?.length !== 2 ||
+      updatedState.toolSlots[1]?.name !== 'Prusament PETG Galaxy Black') {
+    throw new Error('saved tool settings did not hot-update state');
+  }
+  if (!fs.existsSync(path.join(tempDir, 'data', 'tool-settings.json'))) {
+    throw new Error('tool settings were not persisted under DATA_DIR');
+  }
+
+  await stopChild();
+  startChild();
+  await waitForHealth(baseUrl);
+  const restartedTools = await (await fetch(`${baseUrl}/api/settings/tools`)).json();
+  const restartedState = await (await fetch(`${baseUrl}/api/state`)).json();
+  if (restartedTools.toolCount !== 2 || restartedTools.toolSlots?.['2']?.name !== 'Prusament PETG Galaxy Black' ||
+      restartedState.toolCount !== 2 || restartedState.toolSlots?.[1]?.color !== '#112233') {
+    throw new Error('tool settings did not survive a server restart');
+  }
+
+  const autoResponse = await fetch(`${baseUrl}/api/settings/tools`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Origin: baseUrl },
+    body: JSON.stringify({ toolCount: null, toolSlots: { 2: { name: 'Reserve spool' } } }),
+  });
+  const autoTools = await autoResponse.json();
+  if (!autoResponse.ok || autoTools.toolCount !== null || autoTools.effective?.toolCount !== 3 ||
+      autoTools.effective?.toolCountSource !== 'connect' ||
+      autoTools.effective?.toolSlots?.[1]?.loaded !== false ||
+      autoTools.effective?.toolSlots?.[1]?.name !== 'Reserve spool') {
+    throw new Error('automatic count and independent slot overrides did not resolve correctly');
+  }
+
+  await stopChild();
+  startChild();
+  await waitForHealth(baseUrl);
+  const restartedAutoTools = await (await fetch(`${baseUrl}/api/settings/tools`)).json();
+  if (restartedAutoTools.toolCount !== null || restartedAutoTools.effective?.toolCount !== 3 ||
+      restartedAutoTools.toolSlots?.['2']?.name !== 'Reserve spool') {
+    throw new Error('automatic settings did not survive a server restart');
   }
 
   const rejectedMutation = await fetch(`${baseUrl}/api/state`, { method: 'POST' });
@@ -93,7 +223,7 @@ try {
     throw new Error('state API unexpectedly exposed a mutation or authentication surface');
   }
 
-  console.log(`Smoke test passed on ${process.platform}: health, source offer, state, and read-only API.`);
+  console.log(`Smoke test passed on ${process.platform}: health, source offer, state, scoped writes, and restart persistence.`);
 } catch (error) {
   console.error(`Smoke test failed: ${error.message}`);
   process.exitCode = 1;

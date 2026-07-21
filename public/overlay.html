@@ -91,6 +91,7 @@
     opacity: 1; transform: translateY(0);
     transition: opacity 0.22s ease, transform 0.22s ease;
   }
+  #dashboard-controls.tool-editor-open { width: min(480px, calc(100vw - 32px)); }
   #dashboard-controls.idle:not(.open) {
     opacity: 0; transform: translateY(-6px); pointer-events: none;
   }
@@ -109,6 +110,7 @@
   #controls-handle:hover, #controls-handle:focus-visible { background: rgba(25, 27, 32, 0.9); outline: none; }
   #controls-panel {
     width: 100%; padding: 16px; visibility: hidden; opacity: 0; pointer-events: none;
+    max-height: calc(100vh - 72px); overflow-y: auto;
     transform: translateY(-5px) scale(0.985); transform-origin: top right;
     border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 14px;
     background: rgba(10, 11, 14, 0.88); backdrop-filter: blur(18px);
@@ -155,6 +157,83 @@
   .controls-legal { margin-top: 7px; color: #858d99; font-size: 10px; line-height: 1.45; }
   .controls-legal a { color: #c8ced7; text-decoration: underline; text-underline-offset: 2px; }
   .controls-legal a:hover, .controls-legal a:focus-visible { color: #fff; outline: none; }
+  [hidden] { display: none !important; }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
+  #tools-editor { margin: 0; }
+  .tool-count-row { align-items: flex-end; }
+  .tool-count-controls { display: flex; align-items: center; gap: 7px; }
+  #tool-count-mode, #tool-count-input, .tool-loaded-select {
+    border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 8px;
+    color: #fff; background: rgba(255, 255, 255, 0.07);
+    font: 600 12px 'IBM Plex Sans', sans-serif;
+  }
+  #tool-count-mode { width: 92px; padding: 7px 8px; }
+  #tool-count-input {
+    width: 72px; border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 8px;
+    padding: 7px 9px; color: #fff; background: rgba(255, 255, 255, 0.07);
+    font: 600 13px 'IBM Plex Mono', monospace;
+  }
+  #tool-count-mode:focus-visible, #tool-count-input:focus-visible, .tool-loaded-select:focus-visible,
+  .filament-name:focus-visible, .tool-color:focus-visible, .tool-field-auto:focus-visible {
+    border-color: #ff8a3d; outline: 2px solid rgba(255, 138, 61, 0.25); outline-offset: 1px;
+  }
+  #tool-editor-rows { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+  .tool-editor-row {
+    min-width: 0; margin: 0;
+    padding: 10px; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 10px;
+    background: rgba(255, 255, 255, 0.035);
+  }
+  .tool-editor-row-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 7px; }
+  .tool-editor-title { min-width: 0; }
+  .tool-editor-label { font: 700 11px 'IBM Plex Mono', monospace; letter-spacing: 0.06em; }
+  .tool-source { display: block; margin-top: 2px; color: #929aa6; font-size: 9px; line-height: 1.3; }
+  .tool-loaded { display: inline-flex; align-items: center; gap: 6px; color: #cdd2da; font-size: 10px; }
+  .tool-loaded-select { width: 116px; padding: 5px 6px; }
+  .tool-editor-fields { display: grid; grid-template-columns: 34px minmax(0, 1fr); align-items: start; gap: 8px; }
+  .tool-color-field { display: block; }
+  .filament-name-row { display: grid; grid-template-columns: minmax(0, 1fr) 64px; gap: 6px; }
+  .tool-color {
+    width: 34px; height: 34px; padding: 2px; border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 8px; background: rgba(255, 255, 255, 0.07); cursor: pointer;
+  }
+  .tool-field-auto {
+    min-width: 0; height: 34px; padding: 0 4px; border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 7px; color: #b9bfc9; background: rgba(255, 255, 255, 0.045);
+    font: 600 9px 'IBM Plex Sans', sans-serif; cursor: pointer;
+  }
+  .tool-field-auto:hover, .tool-field-auto:focus-visible { color: #fff; border-color: rgba(255, 255, 255, 0.28); }
+  .tool-field-auto:disabled { opacity: 0.38; cursor: default; }
+  .filament-combobox { min-width: 0; }
+  .filament-name {
+    width: 100%; height: 34px; border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 8px;
+    padding: 7px 9px; color: #fff; background: rgba(255, 255, 255, 0.07);
+    font: 500 12px 'IBM Plex Sans', sans-serif;
+  }
+  .filament-name::placeholder { color: #858d99; }
+  .filament-options {
+    max-height: 176px; margin-top: 5px; overflow-y: auto;
+    border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 8px;
+    background: #17191e; box-shadow: 0 12px 28px rgba(0, 0, 0, 0.34);
+  }
+  .filament-option {
+    display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 8px; align-items: center;
+    padding: 8px 9px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); cursor: pointer;
+  }
+  .filament-option:last-child { border-bottom: 0; }
+  .filament-option:hover, .filament-option.active { background: rgba(255, 255, 255, 0.1); }
+  .filament-swatch { width: 14px; height: 14px; border: 1px solid rgba(255, 255, 255, 0.28); border-radius: 50%; }
+  .filament-option-name { display: block; overflow: hidden; color: #fff; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  .filament-option-meta { display: block; margin-top: 2px; overflow: hidden; color: #9fa6b1; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+  .filament-feedback { min-height: 14px; margin-top: 4px; color: #9fa6b1; font-size: 10px; line-height: 1.35; }
+  #tool-editor-status { min-height: 17px; margin: 9px 0 0; color: #b9bfc9; font-size: 11px; line-height: 1.45; }
+  #tool-editor-status.error { color: #ff9b9f; }
+  .tool-editor-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+  .tool-editor-attribution { margin: 10px 0 0; color: #858d99; font-size: 10px; line-height: 1.45; }
+  .tool-editor-attribution a { color: #c8ced7; text-decoration: underline; text-underline-offset: 2px; }
+  .tool-editor-attribution a:hover, .tool-editor-attribution a:focus-visible { color: #fff; outline: none; }
 
   /* Per-state accent: strip fill, pill background, big percent, bar fill. */
   #card[data-state="PRINTING"] { --accent: #ff8a3d; }
@@ -364,6 +443,15 @@
   .slot.empty .n { color: #ffb454; font-weight: 700; }
   .slot.empty .empty-tag { display: block; }
   .slot.unknown .strand, .slot.unknown .cap, .slot.unknown .funnel { opacity: 0.48; }
+  #tool.compact { gap: 4px; }
+  #tool.compact .slot { padding-left: 3px; padding-right: 3px; }
+  #tool.compact .empty-tag { display: none; }
+  #tool.dense { gap: 1px; }
+  #tool.dense .slot { padding-left: 1px; padding-right: 1px; }
+  #tool.dense .slot .cap { width: 10px; height: 7px; }
+  #tool.dense .slot .funnel { border-left-width: 3px; border-right-width: 3px; border-top-width: 4px; }
+  #tool.dense .slot .strand { width: 2px; height: 8px; }
+  #tool.dense .slot .n { font-size: 8px; }
   #card[data-state="IDLE"] #tool, #card[data-state="UNKNOWN"] #tool { opacity: 0.82; }
 
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
@@ -389,29 +477,72 @@
     <span class="control-live-dot"></span><span>Dashboard</span>
   </button>
   <div id="controls-panel" role="dialog" aria-label="Dashboard controls">
-    <div class="controls-head">
-      <span class="controls-kicker">LIVE VIEW</span>
-      <button id="controls-close" type="button" aria-label="Close dashboard controls">×</button>
-    </div>
-    <div class="control-row">
-      <div class="control-copy">
-        <span class="control-label">Camera</span>
-        <span class="control-value" id="control-camera-state">Connecting…</span>
+    <div id="controls-main">
+      <div class="controls-head">
+        <span class="controls-kicker">LIVE VIEW</span>
+        <button id="controls-close" type="button" aria-label="Close dashboard controls">×</button>
       </div>
-      <button id="camera-retry" class="control-action" type="button">Reconnect</button>
+      <div class="control-row">
+        <div class="control-copy">
+          <span class="control-label">Camera</span>
+          <span class="control-value" id="control-camera-state">Connecting…</span>
+        </div>
+        <button id="camera-retry" class="control-action" type="button">Reconnect</button>
+      </div>
+      <button id="room-toggle" class="control-row" type="button" aria-pressed="false">
+        <span class="control-copy">
+          <span class="control-label">Room temperature</span>
+          <span class="control-value" id="room-toggle-note">Hidden</span>
+        </span>
+        <span class="switch-rail" aria-hidden="true"><span class="switch-knob"></span></span>
+      </button>
+      <div class="control-row">
+        <div class="control-copy">
+          <span class="control-label">Tools &amp; filament</span>
+          <span class="control-value" id="tool-settings-summary">Loading…</span>
+        </div>
+        <button id="tools-configure" class="control-action" type="button">Configure</button>
+      </div>
+      <div id="tool-settings-announcement" class="sr-only" role="status" aria-live="polite"></div>
+      <div class="controls-foot" id="dashboard-mode-note">Camera mode follows the browser-source height.</div>
+      <div class="controls-legal">
+        <a id="source-link" href="/source" target="_blank" rel="noopener">Source &amp; AGPL license</a>
+        <span aria-hidden="true"> · </span><span>No warranty</span>
+      </div>
     </div>
-    <button id="room-toggle" class="control-row" type="button" aria-pressed="false">
-      <span class="control-copy">
-        <span class="control-label">Room temperature</span>
-        <span class="control-value" id="room-toggle-note">Hidden</span>
-      </span>
-      <span class="switch-rail" aria-hidden="true"><span class="switch-knob"></span></span>
-    </button>
-    <div class="controls-foot" id="dashboard-mode-note">Camera mode follows the browser-source height.</div>
-    <div class="controls-legal">
-      <a id="source-link" href="/source" target="_blank" rel="noopener">Source &amp; AGPL license</a>
-      <span aria-hidden="true"> · </span><span>No warranty</span>
-    </div>
+
+    <form id="tools-editor" hidden="" novalidate="">
+      <div class="controls-head">
+        <span class="controls-kicker" id="tools-editor-title">TOOLS &amp; FILAMENT</span>
+      </div>
+      <div class="control-row tool-count-row">
+        <span class="control-copy">
+          <label class="control-label" for="tool-count-mode">Tool count</label>
+          <span class="control-value" id="tool-count-source">Waiting for automatic detection…</span>
+        </span>
+        <span class="tool-count-controls">
+          <select id="tool-count-mode" aria-describedby="tool-count-source">
+            <option value="auto">Auto</option>
+            <option value="override">Override</option>
+          </select>
+          <input id="tool-count-input" type="number" min="1" max="32" step="1" inputmode="numeric"
+            aria-label="Custom tool count" aria-describedby="tool-count-source" />
+        </span>
+      </div>
+      <div id="tool-editor-rows"></div>
+      <p id="tool-editor-status" role="status" aria-live="polite"></p>
+      <div class="tool-editor-actions">
+        <button id="tool-editor-cancel" class="control-action" type="button">Cancel</button>
+        <button id="tool-editor-save" class="control-action" type="submit">Save</button>
+      </div>
+      <p class="tool-editor-attribution">
+        Search text is sent by this server to
+        <a href="https://filamentcolors.xyz/" target="_blank" rel="noopener">FilamentColors.xyz</a>
+        for suggestions. Data by Joe Kaufeld,
+        <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>,
+        normalized by LayerRelay.
+      </p>
+    </form>
   </div>
 </div>
 
@@ -503,6 +634,10 @@
   var PARAMS = new URLSearchParams(location.search);
   var CAMERA_AUTO_MIN_HEIGHT = 600;        // 420px legacy overlay off, 1080px dashboard on
   var ROOM_PREF_KEY = 'layer-relay.room-visible';
+  var TOOL_SETTINGS_URL = '/api/settings/tools';
+  var FILAMENT_SEARCH_URL = '/api/filaments';
+  var FILAMENT_SEARCH_DELAY_MS = 500;
+  var TOOL_COLOR_RE = /^#[0-9a-f]{6}$/i;
 
   function queryFlag(name) {
     if (!PARAMS.has(name)) return null;
@@ -526,8 +661,10 @@
   var roomOverride = queryFlag('room');
   var ROOM_VISIBLE = roomOverride == null ? storedRoomPreference() : roomOverride;
   var el = {};
-  ('card cameraStage cameraFeed cameraStatusTitle cameraStatusDetail dashboardControls controlsHandle ' +
+  ('card cameraStage cameraFeed cameraStatusTitle cameraStatusDetail dashboardControls controlsHandle controlsPanel ' +
     'controlsClose controlCameraState cameraRetry roomToggle roomToggleNote dashboardModeNote ' +
+    'controlsMain toolsConfigure toolSettingsSummary toolSettingsAnnouncement toolsEditor toolCountMode toolCountInput toolCountSource ' +
+    'toolEditorRows toolEditorStatus toolEditorSave toolEditorCancel ' +
     'stripFill thumb thumbPh name pill offlineTag fill trackHint pct pmetaRight temp bed chamber room stats1 ' +
     'material tool toolBadge speed flow layer fanhotend swaps waste').split(' ').forEach(function (key) {
       el[key] = document.getElementById(key.replace(/[A-Z]/g, function (c) { return '-' + c.toLowerCase(); }));
@@ -575,9 +712,16 @@
   // Slot inventory is supplied by /api/state rather than baked into the presentation.
   var slots = [];
   function normalizeToolSlots(d) {
-    var raw = d && Array.isArray(d.toolSlots) ? d.toolSlots : [];
-    var requested = Math.round(Number(d && d.toolCount));
-    var count = Math.min(32, Math.max(8, isFinite(requested) ? requested : 0, raw.length));
+    var source = d && d.toolSlots;
+    var raw = Array.isArray(source) ? source : [];
+    if (!raw.length && source && typeof source === 'object') {
+      var objectLabels = Object.keys(source).filter(function (key) { return /^[1-9][0-9]*$/.test(key); });
+      var objectCount = objectLabels.reduce(function (highest, key) { return Math.max(highest, Number(key)); }, 0);
+      raw = Array.from({ length: Math.min(32, objectCount) }, function (_, index) { return source[String(index + 1)]; });
+    }
+    var requested = Number(d && d.toolCount);
+    var explicitCount = isFinite(requested) && Math.floor(requested) === requested && requested >= 1 && requested <= 32;
+    var count = explicitCount ? requested : Math.min(32, Math.max(8, raw.length));
     var list = [], byLabel = {};
     var active = d && d.toolLabel != null ? Math.round(Number(d.toolLabel)) : null;
     if (!isFinite(active) || active < 1) active = null;
@@ -588,11 +732,15 @@
       var info = slot ? {
         label: label,
         loaded: typeof slot.loaded === 'boolean' ? slot.loaded : null,
-        name: slot.name || null,
-        color: slot.color || null,
-      } : { label: label, loaded: raw.length ? false : null, name: null, color: null };
+        name: typeof slot.name === 'string' && slot.name.trim() ? slot.name.trim().slice(0, 80) : null,
+        material: typeof slot.material === 'string' && slot.material.trim() ? slot.material.trim().slice(0, 40) : null,
+        color: typeof slot.color === 'string' && TOOL_COLOR_RE.test(slot.color) ? slot.color : null,
+        sources: slot.sources && typeof slot.sources === 'object' ? slot.sources : null,
+      } : { label: label, loaded: null, name: null, material: null, color: null, sources: null };
       if (label === active && liveMaterial) {
-        info = Object.assign({}, info, { loaded: true, liveMaterial: liveMaterial });
+        var loadedIsOverridden = info.sources && info.sources.loaded === 'override';
+        info = Object.assign({}, info, { liveMaterial: liveMaterial });
+        if (!loadedIsOverridden) info.loaded = true;
       }
       list.push(info);
       byLabel[label] = info;
@@ -601,7 +749,8 @@
   }
 
   function configuredSlotName(slot) {
-    return slot && slot.name && String(slot.name).trim() || null;
+    return slot && ((slot.name && String(slot.name).trim()) ||
+      (slot.material && String(slot.material).trim())) || null;
   }
 
   function materialFamily(value) {
@@ -619,6 +768,7 @@
     var live = typeof liveMaterial === 'string' && liveMaterial.trim() ? liveMaterial.trim() : null;
     if (!live) return configured;
     if (!configured) return live;
+    if (slot && slot.sources && slot.sources.name === 'override') return configured;
     var configuredFamily = materialFamily(configured);
     var liveFamily = materialFamily(live);
     // A live PLA/PETG/etc reading wins over stale slot config from a different family.
@@ -628,6 +778,9 @@
   function syncToolSlots(d) {
     var normalized = normalizeToolSlots(d || {});
     S.toolSlotInfo = normalized.byLabel;
+    el.tool.classList.toggle('compact', normalized.list.length > 8);
+    el.tool.classList.toggle('dense', normalized.list.length > 16);
+    syncToolSettingsSummary(d || {});
     var key = JSON.stringify(normalized.list);
     if (key === S.toolSlotsKey) return;
     S.toolSlotsKey = key;
@@ -655,6 +808,830 @@
     return String(s).replace(/[&<>"]/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
     });
+  }
+
+  var toolEditorOpen = false;
+  var toolEditorDirty = false;
+  var toolEditorSaving = false;
+  var toolEditorDraft = null;
+  var toolEditorView = null;
+  var toolEditorRowRefs = [];
+  var toolEditorBaselineKey = '';
+  var toolSettingsSeq = 0;
+  var toolSettingsCtrl = null;
+  var filamentSearchTimer = null;
+  var filamentSearchCtrl = null;
+  var filamentSearchSeq = 0;
+  var filamentSearchOwner = null;
+  var activeFilamentRow = null;
+
+  function own(obj, key) { return Object.prototype.hasOwnProperty.call(obj, key); }
+
+  function cleanEditorName(value) {
+    return typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 80) : '';
+  }
+
+  function normalizedEditorSlot(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    var out = {};
+    if (typeof value.loaded === 'boolean') out.loaded = value.loaded;
+    if (typeof value.name === 'string' && value.name) out.name = cleanEditorName(value.name);
+    if (typeof value.color === 'string' && TOOL_COLOR_RE.test(value.color)) out.color = value.color.toUpperCase();
+    return out;
+  }
+
+  function normalizeToolSettings(value) {
+    value = value && typeof value === 'object' ? value : {};
+    var slots = {};
+    var source = value.toolSlots;
+    if (source && typeof source === 'object' && !Array.isArray(source)) {
+      Object.keys(source).forEach(function (key) {
+        if (!/^(?:[1-9]|[12][0-9]|3[0-2])$/.test(key)) return;
+        var slot = normalizedEditorSlot(source[key]);
+        if (Object.keys(slot).length) slots[String(Number(key))] = slot;
+      });
+    }
+    var requested = value.toolCount;
+    var countIsValid = Number.isInteger(requested) && requested >= 1 && requested <= 32;
+    return { toolCount: requested === null ? null : countIsValid ? requested : null, toolSlots: slots };
+  }
+
+  function normalizedPublicSlot(value, label) {
+    value = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    var out = {
+      toolIndex: label - 1,
+      toolLabel: label,
+      loaded: typeof value.loaded === 'boolean' ? value.loaded : null,
+      name: typeof value.name === 'string' && value.name.trim() ? cleanEditorName(value.name).trim() : null,
+      material: typeof value.material === 'string' && value.material.trim() ? value.material.trim().slice(0, 40) : null,
+      color: typeof value.color === 'string' && TOOL_COLOR_RE.test(value.color) ? value.color.toUpperCase() : null,
+      sources: value.sources && typeof value.sources === 'object' && !Array.isArray(value.sources) ? value.sources : null,
+    };
+    return out;
+  }
+
+  function normalizePublicSlots(source, count) {
+    var keyed = {};
+    if (Array.isArray(source)) {
+      source.slice(0, 32).forEach(function (slot, index) {
+        var rawLabel = slot && Number(slot.toolLabel);
+        var label = Number.isInteger(rawLabel) && rawLabel >= 1 && rawLabel <= 32 ? rawLabel : index + 1;
+        keyed[String(label)] = normalizedPublicSlot(slot, label);
+      });
+    } else if (source && typeof source === 'object') {
+      Object.keys(source).forEach(function (key) {
+        if (/^(?:[1-9]|[12][0-9]|3[0-2])$/.test(key)) keyed[key] = normalizedPublicSlot(source[key], Number(key));
+      });
+    }
+    return Array.from({ length: count }, function (_, index) {
+      var label = index + 1;
+      return keyed[String(label)] || normalizedPublicSlot(null, label);
+    });
+  }
+
+  function normalizeDetectedTools(value) {
+    value = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    var count = Number.isInteger(value.toolCount) && value.toolCount >= 1 && value.toolCount <= 32 ? value.toolCount : null;
+    if (count == null && Array.isArray(value.toolSlots) && value.toolSlots.length) count = Math.min(32, value.toolSlots.length);
+    return {
+      source: value.source === 'connect' ? 'connect' : null,
+      status: ['fresh', 'stale', 'unavailable'].indexOf(value.status) >= 0 ? value.status : 'unavailable',
+      toolCount: count,
+      toolSlots: count == null ? [] : normalizePublicSlots(value.toolSlots, count),
+    };
+  }
+
+  function normalizeEffectiveTools(value, detected, overrides) {
+    value = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    var count = Number.isInteger(value.toolCount) && value.toolCount >= 1 && value.toolCount <= 32 ? value.toolCount : null;
+    if (count == null) count = overrides.toolCount || detected.toolCount || 1;
+    var countSource = ['override', 'connect', 'fallback'].indexOf(value.toolCountSource) >= 0 ? value.toolCountSource :
+      (overrides.toolCount != null ? 'override' : detected.toolCount != null ? 'connect' : 'fallback');
+    return {
+      toolCount: count,
+      toolCountSource: countSource,
+      countAdjusted: value.countAdjusted === true,
+      toolSlots: normalizePublicSlots(value.toolSlots, count),
+    };
+  }
+
+  function normalizeToolSettingsView(value) {
+    value = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    var overrides = normalizeToolSettings(value);
+    var detected = normalizeDetectedTools(value.detected);
+    var effectiveSource = value.effective;
+    // A bare override response is tolerated for a rolling upgrade, but detected values
+    // are never copied into the override draft.
+    if (!effectiveSource || typeof effectiveSource !== 'object') {
+      var bareCount = overrides.toolCount || detected.toolCount || 1;
+      effectiveSource = {
+        toolCount: bareCount,
+        toolCountSource: overrides.toolCount != null ? 'override' : detected.toolCount != null ? 'connect' : 'fallback',
+        toolSlots: Array.isArray(value.toolSlots) ? value.toolSlots : [],
+      };
+    }
+    return {
+      toolCount: overrides.toolCount,
+      toolSlots: overrides.toolSlots,
+      detected: detected,
+      effective: normalizeEffectiveTools(effectiveSource, detected, overrides),
+    };
+  }
+
+  function toolSettingsViewFromState(value) {
+    value = value && typeof value === 'object' ? value : {};
+    if (value.toolSettings && typeof value.toolSettings === 'object') return normalizeToolSettingsView(value.toolSettings);
+    return normalizeToolSettingsView({
+      toolCount: null,
+      toolSlots: {},
+      detected: { source: null, status: 'unavailable', toolCount: null, toolSlots: [] },
+      effective: {
+        toolCount: Number.isInteger(value.toolCount) ? value.toolCount : 1,
+        toolCountSource: value.toolCountSource || 'fallback',
+        toolSlots: Array.isArray(value.toolSlots) ? value.toolSlots : [],
+      },
+    });
+  }
+
+  function cloneToolOverrides(value) {
+    return JSON.parse(JSON.stringify({ toolCount: value.toolCount, toolSlots: value.toolSlots }));
+  }
+
+  function toolEditorDraftKey(value) {
+    return JSON.stringify(normalizeToolSettings(value));
+  }
+
+  function syncToolEditorBaseline() {
+    toolEditorBaselineKey = toolEditorDraft ? toolEditorDraftKey(toolEditorDraft) : '';
+  }
+
+  function slotFromList(list, label) {
+    return Array.isArray(list) ? list.find(function (slot) { return slot && slot.toolLabel === label; }) || null : null;
+  }
+
+  function automaticField(label, field) {
+    var detectedSlot = toolEditorView && slotFromList(toolEditorView.detected.toolSlots, label);
+    if (detectedSlot) {
+      if (field === 'name') return detectedSlot.name || detectedSlot.material || null;
+      if (field === 'loaded' && typeof detectedSlot.loaded === 'boolean') return detectedSlot.loaded;
+      if (field === 'color' && detectedSlot.color) return detectedSlot.color;
+    }
+    var effectiveSlot = toolEditorView && slotFromList(toolEditorView.effective.toolSlots, label);
+    var source = effectiveSlot && effectiveSlot.sources && effectiveSlot.sources[field];
+    if (effectiveSlot && source !== 'override') {
+      if (field === 'name') return effectiveSlot.name || effectiveSlot.material || null;
+      if (field === 'loaded' && typeof effectiveSlot.loaded === 'boolean') return effectiveSlot.loaded;
+      if (field === 'color' && effectiveSlot.color) return effectiveSlot.color;
+    }
+    return null;
+  }
+
+  function automaticToolCount() {
+    if (toolEditorView && toolEditorView.detected.toolCount != null) return toolEditorView.detected.toolCount;
+    if (toolEditorView && toolEditorView.effective.toolCountSource !== 'override') return toolEditorView.effective.toolCount;
+    var highest = toolEditorDraft ? Object.keys(toolEditorDraft.toolSlots).reduce(function (max, key) {
+      return Math.max(max, Number(key));
+    }, 0) : 0;
+    return Math.max(1, highest);
+  }
+
+  function editorToolCount() {
+    return toolEditorDraft && toolEditorDraft.toolCount != null ? toolEditorDraft.toolCount : automaticToolCount();
+  }
+
+  function connectStatusText(view) {
+    if (!view || view.detected.source !== 'connect') return 'Connect unavailable';
+    if (view.detected.status === 'fresh') return 'Connect fresh';
+    if (view.detected.status === 'stale') return 'Connect stale';
+    return 'Connect unavailable';
+  }
+
+  function syncToolSettingsSummary(value) {
+    if (!el.toolSettingsSummary) return;
+    var view = value && value.effective ? normalizeToolSettingsView(value) : toolSettingsViewFromState(value);
+    var loaded = view.effective.toolSlots.filter(function (slot) { return slot.loaded === true; }).length;
+    var provenance = view.effective.toolCountSource === 'override' ? 'Override' :
+      view.effective.toolCountSource === 'connect' ? 'Auto · ' + connectStatusText(view) : 'Auto · fallback';
+    setText(el.toolSettingsSummary, view.effective.toolCount + ' tool' +
+      (view.effective.toolCount === 1 ? '' : 's') + ' · ' + loaded + ' loaded · ' + provenance);
+  }
+
+  function toolSettingsPayload(draft) {
+    var count = draft && draft.toolCount;
+    if (count !== null && (!Number.isInteger(count) || count < 1 || count > 32)) {
+      throw new Error('Custom tool count must be an integer from 1 to 32.');
+    }
+    var out = {};
+    var source = draft && draft.toolSlots && typeof draft.toolSlots === 'object' ? draft.toolSlots : {};
+    Object.keys(source).sort(function (a, b) { return Number(a) - Number(b); }).forEach(function (key) {
+      if (!/^(?:[1-9]|[12][0-9]|3[0-2])$/.test(key)) return;
+      var value = source[key] && typeof source[key] === 'object' ? source[key] : {};
+      var slot = {};
+      if (typeof value.loaded === 'boolean') slot.loaded = value.loaded;
+      if (typeof value.name === 'string') {
+        var name = value.name.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
+        if (name.length > 80) throw new Error('Tool ' + key + ' filament name must be at most 80 characters.');
+        if (name) slot.name = name;
+      }
+      if (value.color != null && value.color !== '') {
+        if (typeof value.color !== 'string' || !TOOL_COLOR_RE.test(value.color)) {
+          throw new Error('Tool ' + key + ' color must be a six-digit hex value.');
+        }
+        slot.color = value.color.toUpperCase();
+      }
+      if (Object.keys(slot).length) out[key] = slot;
+    });
+    return { toolCount: count, toolSlots: out };
+  }
+
+  function setToolEditorStatus(message, isError) {
+    setText(el.toolEditorStatus, message || '');
+    el.toolEditorStatus.classList.toggle('error', !!isError);
+  }
+
+  function updateToolEditorSaveState() {
+    var count = Number(el.toolCountInput.value);
+    var countIsValid = toolEditorDraft && (toolEditorDraft.toolCount === null ||
+      (isFinite(count) && Math.floor(count) === count && count >= 1 && count <= 32));
+    el.toolEditorSave.disabled = toolEditorSaving || !toolEditorDirty || !countIsValid;
+    el.toolEditorCancel.disabled = toolEditorSaving;
+    el.toolCountMode.disabled = toolEditorSaving;
+    el.toolCountInput.disabled = toolEditorSaving || !toolEditorDraft || toolEditorDraft.toolCount === null;
+    for (var i = 0; i < toolEditorRowRefs.length; i++) {
+      var row = toolEditorRowRefs[i];
+      row.loaded.disabled = toolEditorSaving;
+      row.color.disabled = toolEditorSaving;
+      var draftSlot = toolEditorDraft && toolEditorDraft.toolSlots[String(row.label)];
+      row.nameAuto.disabled = toolEditorSaving || !(draftSlot && own(draftSlot, 'name'));
+      row.input.disabled = toolEditorSaving;
+      updateToolRowSource(row);
+    }
+  }
+
+  function markToolEditorDirty() {
+    toolEditorDirty = !!toolEditorDraft && toolEditorDraftKey(toolEditorDraft) !== toolEditorBaselineKey;
+    var count = Number(el.toolCountInput.value);
+    var countIsValid = toolEditorDraft && (toolEditorDraft.toolCount === null ||
+      (isFinite(count) && Math.floor(count) === count && count >= 1 && count <= 32));
+    if (!toolEditorSaving) setToolEditorStatus(
+      countIsValid ? (toolEditorDirty ? 'Unsaved changes.' : '') :
+        'Custom tool count must be an integer from 1 to 32.',
+      !countIsValid,
+    );
+    updateToolEditorSaveState();
+  }
+
+  function ensureToolDraftSlot(label) {
+    var key = String(label);
+    if (!own(toolEditorDraft.toolSlots, key)) toolEditorDraft.toolSlots[key] = {};
+    return toolEditorDraft.toolSlots[key];
+  }
+
+  function pruneToolDraftSlot(label) {
+    var key = String(label);
+    if (toolEditorDraft && own(toolEditorDraft.toolSlots, key) &&
+        !Object.keys(toolEditorDraft.toolSlots[key]).length) delete toolEditorDraft.toolSlots[key];
+  }
+
+  function createEditorElement(tag, className, textValue) {
+    var node = document.createElement(tag);
+    if (className) node.className = className;
+    if (textValue != null) node.textContent = textValue;
+    return node;
+  }
+
+  function closeFilamentOptions(row) {
+    if (!row) return;
+    row.suggestions = [];
+    row.activeSuggestion = -1;
+    row.listbox.hidden = true;
+    row.input.setAttribute('aria-expanded', 'false');
+    row.input.removeAttribute('aria-activedescendant');
+    if (activeFilamentRow === row) activeFilamentRow = null;
+  }
+
+  function cancelFilamentSearch(row) {
+    if (row && filamentSearchOwner && filamentSearchOwner !== row) return;
+    ++filamentSearchSeq;
+    clearTimeout(filamentSearchTimer);
+    filamentSearchTimer = null;
+    if (filamentSearchCtrl) filamentSearchCtrl.abort();
+    filamentSearchCtrl = null;
+    filamentSearchOwner = null;
+  }
+
+  function setActiveFilamentOption(row, index) {
+    if (!row || !row.suggestions.length) return;
+    var length = row.suggestions.length;
+    row.activeSuggestion = (index + length) % length;
+    for (var i = 0; i < row.optionNodes.length; i++) {
+      var active = i === row.activeSuggestion;
+      row.optionNodes[i].classList.toggle('active', active);
+      row.optionNodes[i].setAttribute('aria-selected', active ? 'true' : 'false');
+    }
+    row.input.setAttribute('aria-activedescendant', row.optionNodes[row.activeSuggestion].id);
+    if (typeof row.optionNodes[row.activeSuggestion].scrollIntoView === 'function') {
+      row.optionNodes[row.activeSuggestion].scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  function normalizeFilamentSuggestion(value) {
+    if (!value || typeof value !== 'object') return null;
+    var label = typeof value.label === 'string' ? value.label.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 80) : '';
+    if (!label) return null;
+    return {
+      id: value.id == null ? label : String(value.id),
+      label: label,
+      manufacturer: typeof value.manufacturer === 'string' ? value.manufacturer.trim().slice(0, 80) : '',
+      material: typeof value.material === 'string' ? value.material.trim().slice(0, 40) : '',
+      colorName: typeof value.colorName === 'string' ? value.colorName.trim().slice(0, 80) : '',
+      color: typeof value.color === 'string' && TOOL_COLOR_RE.test(value.color) ? value.color.toUpperCase() : null,
+      url: typeof value.url === 'string' ? value.url : null,
+    };
+  }
+
+  function selectFilamentSuggestion(row, suggestion) {
+    suggestion = normalizeFilamentSuggestion(suggestion);
+    if (!row || !suggestion || !toolEditorDraft || toolEditorSaving) return;
+    var current = toolEditorDraft.toolSlots[String(row.label)] || {};
+    var changed = !own(current, 'name') || current.name !== suggestion.label ||
+      !!(suggestion.color && (!own(current, 'color') || current.color !== suggestion.color));
+    var slot = ensureToolDraftSlot(row.label);
+    slot.name = suggestion.label;
+    if (suggestion.color) slot.color = suggestion.color;
+    row.input.value = suggestion.label;
+    if (suggestion.color) row.color.value = suggestion.color;
+    cancelFilamentSearch(row);
+    closeFilamentOptions(row);
+    setText(row.feedback, 'Selected ' + suggestion.label + '.');
+    if (changed) markToolEditorDirty();
+  }
+
+  function bindFilamentOption(node, row, suggestion, index) {
+    node.addEventListener('mousedown', function (event) { event.preventDefault(); });
+    node.addEventListener('click', function () { selectFilamentSuggestion(row, suggestion); });
+    node.addEventListener('pointerenter', function () { setActiveFilamentOption(row, index); });
+  }
+
+  function renderFilamentSuggestions(row, payload) {
+    if (!row) return;
+    row.listbox.replaceChildren();
+    row.optionNodes = [];
+    row.suggestions = (payload && Array.isArray(payload.suggestions) ? payload.suggestions : [])
+      .map(normalizeFilamentSuggestion).filter(Boolean).slice(0, 20);
+    row.activeSuggestion = -1;
+    for (var i = 0; i < row.suggestions.length; i++) {
+      var suggestion = row.suggestions[i];
+      var option = createEditorElement('div', 'filament-option');
+      option.id = 'filament-option-' + row.label + '-' + i;
+      option.setAttribute('role', 'option');
+      option.setAttribute('aria-selected', 'false');
+      var swatch = createEditorElement('span', 'filament-swatch');
+      swatch.setAttribute('aria-hidden', 'true');
+      if (suggestion.color) swatch.style.backgroundColor = suggestion.color;
+      var copy = createEditorElement('span');
+      copy.appendChild(createEditorElement('span', 'filament-option-name', suggestion.label));
+      var meta = [suggestion.manufacturer, suggestion.material, suggestion.colorName]
+        .filter(function (part, index, list) { return part && list.indexOf(part) === index; }).join(' · ');
+      if (meta) copy.appendChild(createEditorElement('span', 'filament-option-meta', meta));
+      option.appendChild(swatch);
+      option.appendChild(copy);
+      bindFilamentOption(option, row, suggestion, i);
+      row.listbox.appendChild(option);
+      row.optionNodes.push(option);
+    }
+    var unavailable = !!(payload && payload.unavailable);
+    var stale = !!(payload && payload.stale);
+    if (row.suggestions.length) {
+      row.listbox.hidden = false;
+      row.input.setAttribute('aria-expanded', 'true');
+      activeFilamentRow = row;
+      setText(row.feedback, stale ? 'Using cached catalog suggestions.' : row.suggestions.length + ' catalog suggestions.');
+    } else {
+      closeFilamentOptions(row);
+      setText(row.feedback, unavailable ?
+        'Catalog unavailable — enter a custom filament name.' :
+        'No catalog match — this custom name can still be saved.');
+    }
+  }
+
+  function requestFilamentSuggestions(row, query, seq) {
+    var ctrl = new AbortController();
+    filamentSearchCtrl = ctrl;
+    filamentSearchOwner = row;
+    return fetch(FILAMENT_SEARCH_URL + '?q=' + encodeURIComponent(query), {
+      cache: 'no-store', signal: ctrl.signal,
+    })
+      .then(function (response) { if (!response.ok) throw new Error('catalog unavailable'); return response.json(); })
+      .then(function (payload) {
+        if (seq !== filamentSearchSeq || !toolEditorOpen || row.input.value.trim() !== query) return;
+        renderFilamentSuggestions(row, payload);
+      })
+      .catch(function (error) {
+        if (seq !== filamentSearchSeq || (error && error.name === 'AbortError')) return;
+        renderFilamentSuggestions(row, { suggestions: [], stale: false, unavailable: true });
+      })
+      .finally(function () {
+        if (seq === filamentSearchSeq) {
+          filamentSearchCtrl = null;
+          filamentSearchOwner = null;
+        }
+      });
+  }
+
+  function searchFilamentsNow(row, query) {
+    query = String(query == null ? row.input.value : query).trim();
+    clearTimeout(filamentSearchTimer);
+    filamentSearchTimer = null;
+    var seq = ++filamentSearchSeq;
+    if (filamentSearchCtrl) filamentSearchCtrl.abort();
+    filamentSearchCtrl = null;
+    filamentSearchOwner = row;
+    closeFilamentOptions(row);
+    if (!query) {
+      setText(row.feedback, 'Type to search, or enter a custom filament name.');
+      return Promise.resolve();
+    }
+    setText(row.feedback, 'Searching filament catalog…');
+    return requestFilamentSuggestions(row, query, seq);
+  }
+
+  function scheduleFilamentSearch(row) {
+    clearTimeout(filamentSearchTimer);
+    filamentSearchTimer = null;
+    var query = row.input.value.trim();
+    ++filamentSearchSeq;
+    if (filamentSearchCtrl) filamentSearchCtrl.abort();
+    filamentSearchCtrl = null;
+    filamentSearchOwner = row;
+    closeFilamentOptions(row);
+    if (!query) {
+      setText(row.feedback, 'Type to search, or enter a custom filament name.');
+      return;
+    }
+    setText(row.feedback, 'Searching filament catalog…');
+    filamentSearchTimer = setTimeout(function () {
+      filamentSearchTimer = null;
+      searchFilamentsNow(row, query);
+    }, FILAMENT_SEARCH_DELAY_MS);
+  }
+
+  function handleFilamentKeydown(row, event) {
+    if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && row.suggestions.length) {
+      event.preventDefault();
+      var start = row.activeSuggestion < 0 ? (event.key === 'ArrowDown' ? 0 : row.suggestions.length - 1) :
+        row.activeSuggestion + (event.key === 'ArrowDown' ? 1 : -1);
+      setActiveFilamentOption(row, start);
+    } else if (event.key === 'Enter' && row.activeSuggestion >= 0) {
+      event.preventDefault();
+      selectFilamentSuggestion(row, row.suggestions[row.activeSuggestion]);
+    } else if (event.key === 'Escape' && !row.listbox.hidden) {
+      event.preventDefault();
+      event.stopPropagation();
+      cancelFilamentSearch(row);
+      closeFilamentOptions(row);
+      setText(row.feedback, 'Custom entry remains available.');
+    }
+  }
+
+  function autoLoadedLabel(label) {
+    var value = automaticField(label, 'loaded');
+    return value === true ? 'Auto (Loaded)' : value === false ? 'Auto (Empty)' : 'Auto (Unknown)';
+  }
+
+  function automaticNameFeedback(label) {
+    var value = automaticField(label, 'name');
+    var status = toolEditorView && toolEditorView.detected ? toolEditorView.detected.status : 'unavailable';
+    var source = status === 'fresh' ? 'Connect' : status === 'stale' ? 'stale Connect data' : 'fallback';
+    return value ? 'Auto from ' + source + ': ' + value + '. Editing creates a name override.' :
+      (status === 'unavailable' ? 'Auto unavailable — type a custom filament name.' :
+        'No automatic filament name — type to create an override.');
+  }
+
+  function updateToolRowSource(row) {
+    if (!row || !toolEditorDraft) return;
+    var slot = toolEditorDraft.toolSlots[String(row.label)] || {};
+    var count = Object.keys(slot).length;
+    setText(row.source, count ? count + ' override' + (count === 1 ? '' : 's') + ' · ' + connectStatusText(toolEditorView) :
+      'Auto · ' + connectStatusText(toolEditorView));
+    row.loaded.value = own(slot, 'loaded') ? (slot.loaded ? 'loaded' : 'empty') : 'auto';
+    row.nameAuto.disabled = toolEditorSaving || !own(slot, 'name');
+  }
+
+  function syncToolCountEditor() {
+    if (!toolEditorDraft) return;
+    var automatic = toolEditorDraft.toolCount === null;
+    var count = editorToolCount();
+    el.toolCountMode.value = automatic ? 'auto' : 'override';
+    el.toolCountInput.value = String(automatic ? count : toolEditorDraft.toolCount);
+    el.toolCountInput.removeAttribute('aria-invalid');
+    if (!automatic && toolEditorView.effective.countAdjusted) {
+      setText(el.toolCountSource, count + ' custom slots · active tool extends display to ' +
+        toolEditorView.effective.toolCount);
+    } else if (!automatic) setText(el.toolCountSource, count + ' custom slots');
+    else if (toolEditorView.detected.source === 'connect' && toolEditorView.detected.status === 'fresh') {
+      setText(el.toolCountSource, count + ' detected by Connect');
+    } else if (toolEditorView.detected.source === 'connect' && toolEditorView.detected.status === 'stale') {
+      setText(el.toolCountSource, count + ' from stale Connect data');
+    } else {
+      setText(el.toolCountSource, count + ' fallback · Connect unavailable');
+    }
+    updateToolEditorSaveState();
+  }
+
+  function bindToolEditorRow(row) {
+    row.loaded.addEventListener('change', function () {
+      if (toolEditorSaving) return;
+      var current = toolEditorDraft.toolSlots[String(row.label)] || {};
+      var changed = row.loaded.value === 'auto' ? own(current, 'loaded') :
+        !own(current, 'loaded') || current.loaded !== (row.loaded.value === 'loaded');
+      if (!changed) return;
+      var slot = ensureToolDraftSlot(row.label);
+      if (row.loaded.value === 'auto') delete slot.loaded;
+      else slot.loaded = row.loaded.value === 'loaded';
+      pruneToolDraftSlot(row.label);
+      markToolEditorDirty();
+    });
+    row.color.addEventListener('input', function () {
+      if (toolEditorSaving) return;
+      var nextColor = row.color.value.toUpperCase();
+      var current = toolEditorDraft.toolSlots[String(row.label)] || {};
+      if (own(current, 'color') && current.color === nextColor) return;
+      ensureToolDraftSlot(row.label).color = nextColor;
+      markToolEditorDirty();
+    });
+    row.nameAuto.addEventListener('click', function () {
+      if (toolEditorSaving) return;
+      var current = toolEditorDraft.toolSlots[String(row.label)] || {};
+      if (!own(current, 'name')) return;
+      cancelFilamentSearch();
+      closeFilamentOptions(row);
+      var slot = ensureToolDraftSlot(row.label);
+      delete slot.name;
+      pruneToolDraftSlot(row.label);
+      row.input.value = automaticField(row.label, 'name') || '';
+      setText(row.feedback, automaticNameFeedback(row.label));
+      markToolEditorDirty();
+    });
+    row.input.addEventListener('input', function () {
+      if (toolEditorSaving) return;
+      var current = toolEditorDraft.toolSlots[String(row.label)] || {};
+      var hasName = !!row.input.value.trim();
+      var changed = hasName ? !own(current, 'name') || current.name !== row.input.value : own(current, 'name');
+      if (!changed) return;
+      var slot = ensureToolDraftSlot(row.label);
+      if (hasName) slot.name = row.input.value;
+      else delete slot.name;
+      pruneToolDraftSlot(row.label);
+      markToolEditorDirty();
+      scheduleFilamentSearch(row);
+    });
+    row.input.addEventListener('keydown', function (event) { handleFilamentKeydown(row, event); });
+    row.input.addEventListener('blur', function () {
+      setTimeout(function () {
+        cancelFilamentSearch(row);
+        closeFilamentOptions(row);
+      }, 120);
+    });
+  }
+
+  function renderToolEditorRows() {
+    el.toolEditorRows.replaceChildren();
+    toolEditorRowRefs = [];
+    var count = editorToolCount();
+    for (var label = 1; label <= count; label++) {
+      var slot = toolEditorDraft.toolSlots[String(label)] || {};
+      var wrapper = createEditorElement('fieldset', 'tool-editor-row');
+      wrapper.appendChild(createEditorElement('legend', 'sr-only', 'Tool ' + label));
+      var head = createEditorElement('div', 'tool-editor-row-head');
+      var title = createEditorElement('div', 'tool-editor-title');
+      title.appendChild(createEditorElement('span', 'tool-editor-label', 'T' + label));
+      var source = createEditorElement('span', 'tool-source');
+      title.appendChild(source);
+      head.appendChild(title);
+
+      var loadedLabel = createEditorElement('label', 'tool-loaded');
+      loadedLabel.appendChild(createEditorElement('span', '', 'Presence'));
+      var loaded = createEditorElement('select', 'tool-loaded-select');
+      loaded.setAttribute('aria-label', 'Tool ' + label + ' presence');
+      [['auto', autoLoadedLabel(label)], ['loaded', 'Loaded'], ['empty', 'Empty']].forEach(function (entry) {
+        var option = createEditorElement('option', '', entry[1]);
+        option.value = entry[0];
+        loaded.appendChild(option);
+      });
+      loaded.value = own(slot, 'loaded') ? (slot.loaded ? 'loaded' : 'empty') : 'auto';
+      loadedLabel.appendChild(loaded);
+      head.appendChild(loadedLabel);
+      wrapper.appendChild(head);
+
+      var fields = createEditorElement('div', 'tool-editor-fields');
+      var colorField = createEditorElement('div', 'tool-color-field');
+      var color = createEditorElement('input', 'tool-color');
+      color.type = 'color';
+      color.value = own(slot, 'color') ? slot.color : automaticField(label, 'color') || '#c8c8c8';
+      color.setAttribute('aria-label', 'Tool ' + label + ' filament color');
+      colorField.appendChild(color);
+      fields.appendChild(colorField);
+
+      var combo = createEditorElement('div', 'filament-combobox');
+      var nameRow = createEditorElement('div', 'filament-name-row');
+      var input = createEditorElement('input', 'filament-name');
+      input.type = 'text';
+      input.value = own(slot, 'name') ? slot.name : automaticField(label, 'name') || '';
+      input.maxLength = 80;
+      input.placeholder = 'Search catalog or enter a custom name';
+      input.setAttribute('role', 'combobox');
+      input.setAttribute('aria-label', 'Tool ' + label + ' filament name');
+      input.setAttribute('aria-autocomplete', 'list');
+      input.setAttribute('aria-expanded', 'false');
+      input.setAttribute('aria-controls', 'filament-options-' + label);
+      input.setAttribute('aria-describedby', 'filament-feedback-' + label);
+      input.setAttribute('autocomplete', 'off');
+      nameRow.appendChild(input);
+      var nameAuto = createEditorElement('button', 'tool-field-auto', 'Auto type');
+      nameAuto.type = 'button';
+      nameAuto.disabled = !own(slot, 'name');
+      nameAuto.setAttribute('aria-label', 'Use automatic tool ' + label + ' filament name');
+      nameRow.appendChild(nameAuto);
+      combo.appendChild(nameRow);
+      var listbox = createEditorElement('div', 'filament-options');
+      listbox.id = 'filament-options-' + label;
+      listbox.setAttribute('role', 'listbox');
+      listbox.setAttribute('aria-label', 'Tool ' + label + ' filament suggestions');
+      listbox.hidden = true;
+      var feedback = createEditorElement('div', 'filament-feedback', own(slot, 'name') ?
+        'Custom name. Type to search, or use Auto to restore detection.' : automaticNameFeedback(label));
+      feedback.id = 'filament-feedback-' + label;
+      feedback.setAttribute('role', 'status');
+      feedback.setAttribute('aria-live', 'polite');
+      combo.appendChild(listbox);
+      combo.appendChild(feedback);
+      fields.appendChild(combo);
+      wrapper.appendChild(fields);
+      el.toolEditorRows.appendChild(wrapper);
+
+      var row = {
+        label: label, wrapper: wrapper, source: source, loaded: loaded, color: color,
+        input: input, nameAuto: nameAuto, listbox: listbox, feedback: feedback,
+        suggestions: [], optionNodes: [], activeSuggestion: -1,
+      };
+      bindToolEditorRow(row);
+      toolEditorRowRefs.push(row);
+      updateToolRowSource(row);
+    }
+  }
+
+  function applyToolSettingsToState(settings) {
+    var normalized = normalizeToolSettingsView(settings);
+    S.data = Object.assign({}, S.data || {}, normalized.effective, { toolSettings: normalized });
+    syncToolSlots(S.data);
+    syncToolSettingsSummary(normalized);
+    return normalized;
+  }
+
+  function focusedToolEditorControl() {
+    var active = document.activeElement;
+    if (active === el.toolCountMode) return { kind: 'mode' };
+    if (active === el.toolCountInput) return { kind: 'count' };
+    for (var i = 0; i < toolEditorRowRefs.length; i++) {
+      var row = toolEditorRowRefs[i];
+      for (var kind of ['loaded', 'color', 'input', 'nameAuto']) {
+        if (active === row[kind]) return { kind: kind, label: row.label };
+      }
+    }
+    return null;
+  }
+
+  function restoreToolEditorFocus(target) {
+    if (!target) return;
+    if (target.kind === 'mode') return el.toolCountMode.focus();
+    if (target.kind === 'count') return el.toolCountInput.focus();
+    var row = toolEditorRowRefs.find(function (candidate) { return candidate.label === target.label; });
+    if (row && row[target.kind]) row[target.kind].focus();
+    else el.toolCountMode.focus();
+  }
+
+  function openToolEditor() {
+    if (toolEditorOpen) return;
+    toolEditorOpen = true;
+    toolEditorDirty = false;
+    toolEditorSaving = false;
+    toolEditorView = toolSettingsViewFromState(S.data || {});
+    toolEditorDraft = cloneToolOverrides(toolEditorView);
+    syncToolEditorBaseline();
+    syncToolCountEditor();
+    renderToolEditorRows();
+    el.controlsMain.hidden = true;
+    el.toolsEditor.hidden = false;
+    el.dashboardControls.classList.add('tool-editor-open');
+    el.controlsPanel.setAttribute('aria-label', 'Tool and filament settings');
+    controlsInteracting = true;
+    clearTimeout(controlsIdleTimer);
+    controlsIdleTimer = null;
+    setControlsOpen(true);
+    setToolEditorStatus('Loading saved tool settings…', false);
+    updateToolEditorSaveState();
+    setTimeout(function () { el.toolCountMode.focus(); }, 0);
+
+    var seq = ++toolSettingsSeq;
+    if (toolSettingsCtrl) toolSettingsCtrl.abort();
+    var ctrl = new AbortController();
+    toolSettingsCtrl = ctrl;
+    fetch(TOOL_SETTINGS_URL, { cache: 'no-store', signal: ctrl.signal })
+      .then(function (response) { if (!response.ok) throw new Error('settings unavailable'); return response.json(); })
+      .then(function (settings) {
+        if (seq !== toolSettingsSeq || !toolEditorOpen) return;
+        var normalized = normalizeToolSettingsView(settings);
+        syncToolSettingsSummary(normalized);
+        if (!toolEditorDirty) {
+          var focusTarget = focusedToolEditorControl();
+          var settingsChanged = JSON.stringify(normalized) !== JSON.stringify(toolEditorView);
+          toolEditorView = normalized;
+          toolEditorDraft = cloneToolOverrides(normalized);
+          syncToolEditorBaseline();
+          syncToolCountEditor();
+          if (settingsChanged) {
+            renderToolEditorRows();
+            restoreToolEditorFocus(focusTarget);
+          }
+          setToolEditorStatus('', false);
+        }
+      })
+      .catch(function (error) {
+        if (seq !== toolSettingsSeq || (error && error.name === 'AbortError')) return;
+        setToolEditorStatus('Could not load saved settings; live values remain editable.', true);
+      })
+      .finally(function () { if (seq === toolSettingsSeq) toolSettingsCtrl = null; });
+  }
+
+  function closeToolEditor(restoreFocus) {
+    if (!toolEditorOpen || toolEditorSaving) return;
+    toolEditorOpen = false;
+    ++toolSettingsSeq;
+    if (toolSettingsCtrl) toolSettingsCtrl.abort();
+    toolSettingsCtrl = null;
+    cancelFilamentSearch();
+    closeFilamentOptions(activeFilamentRow);
+    el.toolsEditor.hidden = true;
+    el.controlsMain.hidden = false;
+    el.dashboardControls.classList.remove('tool-editor-open');
+    el.controlsPanel.setAttribute('aria-label', 'Dashboard controls');
+    controlsInteracting = false;
+    setControlsOpen(true);
+    if (restoreFocus !== false) el.toolsConfigure.focus();
+    toolEditorDraft = null;
+    toolEditorView = null;
+    toolEditorRowRefs = [];
+    syncToolEditorBaseline();
+  }
+
+  function saveToolSettings() {
+    if (!toolEditorOpen || toolEditorSaving) return Promise.resolve();
+    var count = Number(el.toolCountInput.value);
+    if (toolEditorDraft.toolCount !== null &&
+        (!isFinite(count) || Math.floor(count) !== count || count < 1 || count > 32)) {
+      setToolEditorStatus('Custom tool count must be an integer from 1 to 32.', true);
+      el.toolCountInput.focus();
+      return Promise.resolve();
+    }
+    if (toolEditorDraft.toolCount !== null) toolEditorDraft.toolCount = count;
+    var payload;
+    try { payload = toolSettingsPayload(toolEditorDraft); }
+    catch (error) {
+      setToolEditorStatus(error.message, true);
+      return Promise.resolve();
+    }
+    cancelFilamentSearch();
+    closeFilamentOptions(activeFilamentRow);
+    toolEditorSaving = true;
+    setToolEditorStatus('Saving tool settings…', false);
+    updateToolEditorSaveState();
+    return fetch(TOOL_SETTINGS_URL, {
+      method: 'PUT',
+      cache: 'no-store',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+      .then(function (response) {
+        return response.json().then(function (body) {
+          if (!response.ok) throw new Error(body && body.error ? body.error : 'Tool settings could not be saved.');
+          return body;
+        });
+      })
+      .then(function (saved) {
+        var normalized = applyToolSettingsToState(saved);
+        toolEditorView = normalized;
+        toolEditorDraft = cloneToolOverrides(normalized);
+        toolEditorDirty = false;
+        toolEditorSaving = false;
+        setText(el.toolSettingsAnnouncement, 'Tool settings saved.');
+        closeToolEditor(true);
+      })
+      .catch(function (error) {
+        toolEditorSaving = false;
+        setToolEditorStatus(error && error.message ? error.message : 'Tool settings could not be saved.', true);
+        updateToolEditorSaveState();
+      });
   }
 
   var cameraRetryTimer = null;
@@ -793,7 +1770,7 @@
   function scheduleControlsIdle(delay) {
     clearTimeout(controlsIdleTimer);
     controlsIdleTimer = null;
-    if (!CONTROLS_ENABLED || controlsInteracting) return;
+    if (!CONTROLS_ENABLED || controlsInteracting || toolEditorOpen) return;
     controlsIdleTimer = setTimeout(function () {
       if (controlsInteracting) return;
       el.dashboardControls.classList.remove('open');
@@ -863,9 +1840,50 @@
       revealControls();
     });
     el.controlsHandle.addEventListener('click', function () {
+      if (toolEditorOpen) return;
       setControlsOpen(!el.dashboardControls.classList.contains('open'));
     });
     el.controlsClose.addEventListener('click', function () { setControlsOpen(false); });
+    el.toolsConfigure.addEventListener('click', openToolEditor);
+    el.toolEditorCancel.addEventListener('click', function () { closeToolEditor(true); });
+    el.toolsEditor.addEventListener('submit', function (event) {
+      event.preventDefault();
+      saveToolSettings();
+    });
+    el.toolCountMode.addEventListener('change', function () {
+      if (!toolEditorDraft || toolEditorSaving) return;
+      var nextCount = el.toolCountMode.value === 'auto' ? null : automaticToolCount();
+      if (nextCount === toolEditorDraft.toolCount) return;
+      cancelFilamentSearch();
+      closeFilamentOptions(activeFilamentRow);
+      toolEditorDraft.toolCount = nextCount;
+      syncToolCountEditor();
+      renderToolEditorRows();
+      markToolEditorDirty();
+      if (toolEditorDraft.toolCount !== null) el.toolCountInput.focus();
+    });
+    el.toolCountInput.addEventListener('input', function () {
+      if (!toolEditorDraft || toolEditorDraft.toolCount === null) return;
+      var count = Number(el.toolCountInput.value);
+      if (!isFinite(count) || Math.floor(count) !== count || count < 1 || count > 32) {
+        el.toolCountInput.setAttribute('aria-invalid', 'true');
+        setToolEditorStatus('Custom tool count must be an integer from 1 to 32.', true);
+        el.toolEditorSave.disabled = true;
+        return;
+      }
+      el.toolCountInput.removeAttribute('aria-invalid');
+      if (count !== toolEditorDraft.toolCount) {
+        cancelFilamentSearch();
+        closeFilamentOptions(activeFilamentRow);
+        toolEditorDraft.toolCount = count;
+        setText(el.toolCountSource, count + ' custom slots');
+        renderToolEditorRows();
+        markToolEditorDirty();
+      } else {
+        setToolEditorStatus(toolEditorDirty ? 'Unsaved changes.' : '', false);
+        updateToolEditorSaveState();
+      }
+    });
     el.dashboardControls.addEventListener('pointerenter', function () {
       controlsInteracting = true;
       clearTimeout(controlsIdleTimer);
@@ -891,7 +1909,10 @@
       revealControls();
     });
     document.addEventListener('keydown', function (event) {
-      if (event.key === 'Escape') setControlsOpen(false);
+      if (event.key === 'Escape') {
+        if (toolEditorOpen) closeToolEditor(true);
+        else setControlsOpen(false);
+      }
       else if (event.key === 'Tab') revealControls();
     });
     window.addEventListener('resize', function () {
@@ -1261,8 +2282,8 @@
     if (S.jobmapKey && !sameJobKey(S.jobmapKey, d.thumbnailKey)) { S.jobmapKey = null; drawTicks([]); }
     ensureJobmap(d);
 
-    // Material and occupancy come from server-supplied slot inventory. When live telemetry
-    // identifies a different material family, prefer it over stale configured spool text.
+    // Material and occupancy come from server-supplied slot inventory. Explicit name
+    // overrides win; otherwise live telemetry may correct a stale detected material family.
     syncToolSlots(d);
     var activeLabel = d.toolLabel != null ? Math.round(Number(d.toolLabel)) : null;
     if (!isFinite(activeLabel) || activeLabel < 1) activeLabel = null;

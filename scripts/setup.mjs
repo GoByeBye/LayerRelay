@@ -107,13 +107,20 @@ if (!nonInteractive) {
       }
     }
 
-    const toolCountRaw = (await rl.question(`Number of tool slots [${config.toolCount}]: `)).trim();
+    const currentToolCount = config.toolCount == null ? 'auto' : String(config.toolCount);
+    const toolCountRaw = (await rl.question(
+      `Tool count override (auto or 1-32) [${currentToolCount}]: `,
+    )).trim();
     if (toolCountRaw) {
-      const toolCount = Number(toolCountRaw);
-      if (!Number.isInteger(toolCount) || toolCount < 1 || toolCount > 32) {
-        throw new Error('Tool count must be an integer from 1 to 32');
+      if (toolCountRaw.toLowerCase() === 'auto') {
+        config.toolCount = null;
+      } else {
+        const toolCount = Number(toolCountRaw);
+        if (!Number.isInteger(toolCount) || toolCount < 1 || toolCount > 32) {
+          throw new Error('Tool count must be auto or an integer from 1 to 32');
+        }
+        config.toolCount = toolCount;
       }
-      config.toolCount = toolCount;
     }
   } finally {
     output.muted = false;

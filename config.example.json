@@ -10,14 +10,9 @@
   "analysisCacheMaxEntries": 100,
   "analysisCacheMaxBytes": 67108864,
   "printNameOverrides": {},
-  "toolCount": 1,
-  "toolSlots": {
-    "1": {
-      "loaded": true,
-      "name": "Example filament",
-      "color": "#ff8a3d"
-    }
-  },
+  "toolCount": null,
+  "toolSettingsAllowedOrigins": [],
+  "toolSlots": {},
   "localBgcodeDirs": [],
   "cameraRtspUrl": "",
   "cameraStreamEnabled": false,

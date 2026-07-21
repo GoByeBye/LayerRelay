@@ -8,6 +8,7 @@ const { onTestFinished, test } = require('bun:test');
 const {
   quarantineJsonPair,
   readJsonDetailed,
+  readJsonValidatedWithBackup,
   readJsonWithBackup,
   writeFileAtomic,
   writeJsonAtomic,
@@ -49,6 +50,17 @@ test('recovers from the backup when the primary JSON is truncated', () => {
   assert.equal(result.recovered, true);
   assert.equal(result.source, `${file}.bak`);
   assert.deepEqual(result.value, { refresh_token: 'rotated-token' });
+});
+
+test('recovers from the backup when the primary JSON is semantically invalid', () => {
+  const file = path.join(withTempDir(), 'inventory.json');
+  fs.writeFileSync(file, JSON.stringify({ version: 99, count: 32 }));
+  fs.writeFileSync(`${file}.bak`, JSON.stringify({ version: 2, count: 4 }));
+
+  const restored = readJsonValidatedWithBackup(file, (value) =>
+    value && value.version === 2 ? value : null);
+
+  assert.deepEqual(restored, { version: 2, count: 4 });
 });
 
 test('quarantines both corrupt primary and backup files', () => {
