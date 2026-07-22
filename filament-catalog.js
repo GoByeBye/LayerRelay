@@ -217,34 +217,50 @@ function matchScore(text, token, weight) {
   return 40 + weight;
 }
 
-function scoreSuggestion(suggestion, tokens, wholeQuery) {
-  const fields = [
-    [comparable(suggestion.colorName), 30],
-    [comparable(suggestion.manufacturer), 20],
-    [comparable(suggestion.material), 10],
-  ];
+function indexSuggestion(suggestion) {
+  return {
+    suggestion,
+    fields: [
+      [comparable(suggestion.colorName), 30],
+      [comparable(suggestion.manufacturer), 20],
+      [comparable(suggestion.material), 10],
+    ],
+    label: comparable(suggestion.label),
+  };
+}
+
+function buildSearchIndex(suggestions) {
+  return suggestions.map(indexSuggestion);
+}
+
+function scoreSuggestion(indexed, tokens, wholeQuery) {
   let score = 0;
   let matched = 0;
   for (const token of tokens) {
     let best = 0;
-    for (const [field, weight] of fields) best = Math.max(best, matchScore(field, token, weight));
+    for (const [field, weight] of indexed.fields) {
+      best = Math.max(best, matchScore(field, token, weight));
+    }
     if (best > 0) matched += 1;
     score += best;
   }
 
-  const label = comparable(suggestion.label);
+  const label = indexed.label;
   if (label === wholeQuery) score += 300;
   else if (label.startsWith(wholeQuery)) score += 100;
   else if (label.includes(wholeQuery)) score += 50;
   return { score, matched };
 }
 
-function rankSuggestions(values, query) {
+function rankSuggestions(searchIndex, query) {
   const wholeQuery = comparable(query);
   const tokens = wholeQuery.split(' ').filter(Boolean);
   if (!tokens.length) return [];
-  return values
-    .map((suggestion) => ({ suggestion, ...scoreSuggestion(suggestion, tokens, wholeQuery) }))
+  return searchIndex
+    .map((indexed) => ({
+      suggestion: indexed.suggestion,
+      ...scoreSuggestion(indexed, tokens, wholeQuery),
+    }))
     .filter((entry) => entry.matched === tokens.length)
     .sort((left, right) =>
       right.score - left.score ||
@@ -378,6 +394,7 @@ function createFilamentCatalog(options = {}) {
     MAX_MATERIAL_ENTRIES,
   );
   let suggestions = [];
+  let searchIndex = [];
   let checkedAt = 0;
   let nextRetryAt = 0;
   let lastRefreshFailed = false;
@@ -425,10 +442,19 @@ function createFilamentCatalog(options = {}) {
     }
   }
 
+  function installSuggestions(nextSuggestions) {
+    // Comparable search fields are immutable for a normalized suggestion. Build
+    // them once per snapshot instead of repeating Unicode normalization across
+    // every row for each picker keystroke.
+    const nextSearchIndex = buildSearchIndex(nextSuggestions);
+    suggestions = nextSuggestions;
+    searchIndex = nextSearchIndex;
+  }
+
   function loadCache() {
     const saved = readJsonValidatedWithBackup(dataFile, normalizeSavedCache, null);
     if (!saved) return;
-    suggestions = saved.suggestions;
+    installSuggestions(saved.suggestions);
     checkedAt = saved.checkedAt;
   }
 
@@ -462,7 +488,7 @@ function createFilamentCatalog(options = {}) {
         maximumEntries: MAX_BRAND_ENTRIES,
       });
       const nextSuggestions = normalizeDataset(materialValues, brandValues, minimumEntries);
-      suggestions = nextSuggestions;
+      installSuggestions(nextSuggestions);
       checkedAt = timeNow();
       nextRetryAt = 0;
       lastRefreshFailed = false;
@@ -493,7 +519,7 @@ function createFilamentCatalog(options = {}) {
       const stale = !cacheIsFresh();
       if (stale) void refreshDataset();
       return {
-        suggestions: cloneSuggestions(rankSuggestions(suggestions, query)),
+        suggestions: cloneSuggestions(rankSuggestions(searchIndex, query)),
         stale,
         unavailable: stale && lastRefreshFailed,
       };
@@ -502,7 +528,7 @@ function createFilamentCatalog(options = {}) {
     const refreshed = await waitForPromise(refreshDataset(), signal);
     throwIfAborted(signal);
     return {
-      suggestions: cloneSuggestions(rankSuggestions(suggestions, query)),
+      suggestions: cloneSuggestions(rankSuggestions(searchIndex, query)),
       stale: false,
       unavailable: !refreshed,
     };

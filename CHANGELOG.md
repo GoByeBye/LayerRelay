@@ -35,6 +35,8 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   transport cannot permanently stall polling
 - Prusa Connect asset work is serialized by active job, cancels stale downloads,
   retries incomplete descriptors, and rejects invalid `.bgcode` payloads
+- Local filament type-ahead pre-indexes normalized search fields and uses a
+  100 ms input debounce for near-realtime suggestions
 
 ### Removed
 

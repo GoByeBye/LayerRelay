@@ -710,7 +710,7 @@ test('custom values remain saveable while Connect and the catalog are unavailabl
   assert.match(row.feedback.textContent, /Auto unavailable/);
   row.input.value = 'My custom PLA';
   row.input.dispatch('input');
-  runtime.runTimers(500);
+  runtime.runTimers(100);
   await flushPromises();
   assert.match(row.feedback.textContent, /Catalog unavailable/);
   row.color.value = '#345678';
@@ -736,6 +736,32 @@ test('custom values remain saveable while Connect and the catalog are unavailabl
     toolSlots: { 1: { name: 'My custom PLA', color: '#345678' } },
   });
   assert.equal(runtime.elements.get('tool-settings-summary').textContent, '1 tool · 0 loaded · Auto · fallback');
+});
+
+test('filament type-ahead searches the latest value after a 100 ms debounce', async () => {
+  const runtime = createRuntime({
+    height: 420,
+    toolSettings: makeToolSettingsView({
+      detected: { source: 'connect', status: 'fresh', toolCount: 1, toolSlots: [] },
+    }),
+  });
+  runtime.api.openToolEditor();
+  await flushPromises();
+  const row = runtime.api.getToolEditorRows()[0];
+
+  row.input.value = 'p';
+  row.input.dispatch('input');
+  row.input.value = 'petg';
+  row.input.dispatch('input');
+
+  assert.equal(runtime.fetchCalls.filter((call) => String(call.url).startsWith('/api/filaments?')).length, 0);
+  assert.equal([...runtime.timers.values()].filter((timer) => timer.delay === 100).length, 1);
+
+  runtime.runTimers(100);
+  await flushPromises();
+  const catalogCalls = runtime.fetchCalls.filter((call) => String(call.url).startsWith('/api/filaments?'));
+  assert.equal(catalogCalls.length, 1);
+  assert.equal(catalogCalls[0].url, '/api/filaments?q=petg');
 });
 
 test('a superseded catalog response cannot replace newer type-ahead results', async () => {
