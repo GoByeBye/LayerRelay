@@ -126,7 +126,7 @@ if (!artworkProvenance.includes(`Published SHA-256:\n  ${bannerSha256}`)) {
 }
 const ciWorkflow = fs.readFileSync(path.join(rootDir, '.github', 'workflows', 'ci.yml'), 'utf8');
 for (const marker of ['name: Bun source archive', 'git archive --format=tar.gz',
-  'docs/assets/banner\\.webp', 'bun run doctor']) {
+  'docs/assets/(banner|dashboard-preview|overlay-preview)\\.webp', 'bun run doctor']) {
   if (!ciWorkflow.includes(marker)) throw new Error(`CI source-archive gate is missing marker: ${marker}`);
 }
 const restartScript = fs.readFileSync(path.join(rootDir, 'tools', 'restart-overlay.ps1'), 'utf8');
