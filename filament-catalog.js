@@ -1,24 +1,27 @@
 'use strict';
 
-const { readJsonWithBackup, writeJsonAtomic } = require('./persistence.js');
+const { readJsonValidatedWithBackup, writeJsonAtomic } = require('./persistence.js');
 
-const API_HOST = 'filamentcolors.xyz';
-const API_PAGE_SIZE = 25;
-const CACHE_VERSION = 1;
+const API_HOST = 'database.openprinttag.org';
+const MATERIALS_PATH = '/api/materials.json';
+const BRANDS_PATH = '/api/brands/basic.json';
+const SOURCE_URL = `https://${API_HOST}${MATERIALS_PATH}`;
+const CACHE_VERSION = 2;
 const DEFAULT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_MAX_QUERIES = 100;
+const DEFAULT_RETRY_COOLDOWN_MS = 5 * 60 * 1000;
 const DEFAULT_TIMEOUT_MS = 12000;
-const MIN_REQUEST_INTERVAL_MS = 1100;
-const MAX_PENDING_QUERIES = 8;
+const DEFAULT_MIN_DATASET_ENTRIES = 100;
 const MAX_QUERY_LENGTH = 80;
 const MAX_TEXT_LENGTH = 80;
+const MAX_MATERIAL_LENGTH = 40;
 const MAX_LABEL_LENGTH = 80;
 const MAX_SLUG_LENGTH = 240;
-const MAX_RESPONSE_BYTES = 1024 * 1024;
-const MAX_UPSTREAM_RESULTS = 100;
+const MAX_MATERIAL_RESPONSE_BYTES = 16 * 1024 * 1024;
+const MAX_BRAND_RESPONSE_BYTES = 512 * 1024;
+const MAX_MATERIAL_ENTRIES = 25000;
+const MAX_BRAND_ENTRIES = 2000;
 const MAX_SUGGESTIONS = 12;
 const USER_AGENT = 'LayerRelay/0.1 filament-catalog (+https://github.com/GoByeBye/LayerRelay)';
-const ABORTED_WORK = Symbol('aborted filament catalog work');
 
 function truncateCodePoints(value, maximum) {
   const points = Array.from(value);
@@ -59,93 +62,15 @@ function normalizeCatalogQuery(value) {
 
 function normalizeHexColor(value) {
   if (typeof value !== 'string') return null;
-  const match = /^#?([0-9a-f]{6})$/i.exec(value.trim());
-  return match ? `#${match[1].toUpperCase()}` : null;
+  const match = /^#?([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(value.trim());
+  if (!match || (match[2] && match[2].toLowerCase() !== 'ff')) return null;
+  return `#${match[1].toUpperCase()}`;
 }
 
 function safeSlug(value) {
   if (typeof value !== 'string' || value.length > MAX_SLUG_LENGTH) return null;
   const slug = value.trim().toLowerCase();
   return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) ? slug : null;
-}
-
-function slugFromUrl(value) {
-  if (typeof value !== 'string' || value.length > 512) return null;
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== 'https:' || parsed.hostname !== API_HOST || parsed.search || parsed.hash) return null;
-    const match = /^\/swatch\/([^/]+)\/?$/.exec(parsed.pathname);
-    return match ? safeSlug(match[1]) : null;
-  } catch {
-    return null;
-  }
-}
-
-function includesMaterialFamily(specific, parent) {
-  const normalizedSpecific = comparable(specific);
-  const normalizedParent = comparable(parent);
-  if (!normalizedSpecific || !normalizedParent) return false;
-  return normalizedSpecific === normalizedParent ||
-    ` ${normalizedSpecific} `.includes(` ${normalizedParent} `);
-}
-
-function normalizeMaterial(value) {
-  if (value.material != null) return boundedText(value.material);
-  const specific = boundedText(value.filament_type?.name);
-  const parent = boundedText(value.filament_type?.parent_type?.name, 32);
-  if (!specific) return parent;
-  if (!parent || includesMaterialFamily(specific, parent)) return specific;
-  const suffix = ` (${parent})`;
-  const prefix = truncateUtf16(specific, Math.max(1, MAX_TEXT_LENGTH - suffix.length)).trim();
-  return `${prefix}${suffix}`;
-}
-
-function composeLabel(manufacturer, material, colorName) {
-  const prefix = `${manufacturer} ${material} — `;
-  const full = `${prefix}${colorName}`;
-  if (full.length <= MAX_LABEL_LENGTH) return full;
-  if (prefix.length < MAX_LABEL_LENGTH) {
-    return truncateUtf16(full, MAX_LABEL_LENGTH).trim();
-  }
-
-  // Pathologically long manufacturer text must not push the material family out of the
-  // persisted name; the overlay uses that token to reconcile PLA/PETG/etc.
-  const materialSuffix = ` ${material}`;
-  if (materialSuffix.length >= MAX_LABEL_LENGTH) {
-    return truncateUtf16(material, MAX_LABEL_LENGTH).trim();
-  }
-  const shortenedManufacturer = truncateUtf16(
-    manufacturer,
-    MAX_LABEL_LENGTH - materialSuffix.length,
-  ).trim();
-  return `${shortenedManufacturer}${materialSuffix}`.trim();
-}
-
-function normalizeSuggestion(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const id = value.id;
-  if (!Number.isSafeInteger(id) || id <= 0) return null;
-
-  const manufacturer = boundedText(
-    typeof value.manufacturer === 'string' ? value.manufacturer : value.manufacturer?.name,
-  );
-  const material = normalizeMaterial(value);
-  const colorName = boundedText(value.colorName ?? value.color_name);
-  const color = normalizeHexColor(value.color ?? value.hex_color);
-  const slug = safeSlug(value.slug) || slugFromUrl(value.url);
-  if (!manufacturer || !material || !colorName || !color || !slug) return null;
-
-  const label = composeLabel(manufacturer, material, colorName);
-  if (!label) return null;
-  return {
-    id,
-    label,
-    manufacturer,
-    material,
-    colorName,
-    color,
-    url: `https://${API_HOST}/swatch/${slug}/`,
-  };
 }
 
 function comparable(value) {
@@ -157,12 +82,130 @@ function comparable(value) {
     .trim();
 }
 
-function queryKey(query) {
-  return query
-    .normalize('NFKC')
-    .replace(/\s+/gu, ' ')
-    .trim()
-    .toLocaleLowerCase('en-US');
+function includesMaterialFamily(specific, parent) {
+  const normalizedSpecific = comparable(specific);
+  const normalizedParent = comparable(parent);
+  if (!normalizedSpecific || !normalizedParent) return false;
+  return normalizedSpecific === normalizedParent ||
+    ` ${normalizedSpecific} `.includes(` ${normalizedParent} `);
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function deriveColorName(name, material) {
+  const pattern = new RegExp(`^${escapeRegExp(material)}(?:\\s+|\\s*[-–—,:]\\s*)`, 'iu');
+  const withoutMaterial = name.replace(pattern, '').trim();
+  return boundedText(withoutMaterial || name);
+}
+
+function composeLabel(manufacturer, material, colorName) {
+  const materialAlreadyNamed = includesMaterialFamily(colorName, material);
+  const prefix = materialAlreadyNamed
+    ? `${manufacturer} — `
+    : `${manufacturer} ${material} — `;
+  const full = `${prefix}${colorName}`;
+  if (full.length <= MAX_LABEL_LENGTH) return full;
+  if (prefix.length < MAX_LABEL_LENGTH) return truncateUtf16(full, MAX_LABEL_LENGTH).trim();
+
+  const materialSuffix = ` ${material}`;
+  if (materialSuffix.length >= MAX_LABEL_LENGTH) {
+    return truncateUtf16(material, MAX_LABEL_LENGTH).trim();
+  }
+  const shortenedManufacturer = truncateUtf16(
+    manufacturer,
+    MAX_LABEL_LENGTH - materialSuffix.length,
+  ).trim();
+  return `${shortenedManufacturer}${materialSuffix}`.trim();
+}
+
+function sourcePathFromUrl(value) {
+  if (typeof value !== 'string' || value.length > 1024) return null;
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'https:' || parsed.hostname !== API_HOST || parsed.search || parsed.hash) {
+      return null;
+    }
+    const match = /^\/api\/brands\/([^/]+)\/materials\/([^/]+)\.json$/.exec(parsed.pathname);
+    if (!match) return null;
+    const brandSlug = safeSlug(match[1]);
+    const materialSlug = safeSlug(match[2]);
+    return brandSlug && materialSlug ? { brandSlug, materialSlug } : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeBrand(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const slug = safeSlug(value.slug);
+  const name = boundedText(value.name);
+  return slug && name ? { slug, name } : null;
+}
+
+function materialBrandSlug(value) {
+  const embeddedValue = value?.brand?.slug;
+  const idValue = value?.brandId;
+  const embedded = embeddedValue == null ? null : safeSlug(embeddedValue);
+  const brandId = idValue == null ? null : safeSlug(idValue);
+  if ((embeddedValue != null && !embedded) || (idValue != null && !brandId)) return null;
+  if (embedded && brandId && embedded !== brandId) return null;
+  return embedded || brandId;
+}
+
+function normalizeSourceSuggestion(value, brandNames) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || value.class !== 'FFF') {
+    return null;
+  }
+  const brandSlug = materialBrandSlug(value);
+  const materialSlug = safeSlug(value.slug);
+  const manufacturer = brandSlug ? brandNames.get(brandSlug) : null;
+  // Only the official type field is accepted. Name/abbreviation inference could
+  // silently turn incomplete or SLA records into a filament configuration.
+  const material = boundedText(value.type, MAX_MATERIAL_LENGTH);
+  const name = boundedText(value.name);
+  if (!brandSlug || !materialSlug || !manufacturer || !material || !name) return null;
+  const colorName = deriveColorName(name, material);
+  if (!colorName) return null;
+  return {
+    id: `${brandSlug}/${materialSlug}`,
+    label: composeLabel(manufacturer, material, colorName),
+    manufacturer,
+    material,
+    colorName,
+    color: normalizeHexColor(value.primary_color?.color_rgba),
+    url: `https://${API_HOST}/api/brands/${brandSlug}/materials/${materialSlug}.json`,
+  };
+}
+
+function normalizeCachedSuggestion(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const sourcePath = sourcePathFromUrl(value.url);
+  const manufacturer = boundedText(value.manufacturer);
+  const material = boundedText(value.material, MAX_MATERIAL_LENGTH);
+  const colorName = boundedText(value.colorName);
+  if (!sourcePath || !manufacturer || !material || !colorName) return null;
+  return {
+    id: `${sourcePath.brandSlug}/${sourcePath.materialSlug}`,
+    label: composeLabel(manufacturer, material, colorName),
+    manufacturer,
+    material,
+    colorName,
+    color: normalizeHexColor(value.color),
+    url: `https://${API_HOST}/api/brands/${sourcePath.brandSlug}/materials/${sourcePath.materialSlug}.json`,
+  };
+}
+
+function normalizeSuggestion(value, brandName) {
+  if (value?.class === 'FFF') {
+    const brandSlug = materialBrandSlug(value);
+    const normalizedBrandName = boundedText(brandName ?? value.brandName);
+    const brandNames = new Map();
+    if (brandSlug && normalizedBrandName) brandNames.set(brandSlug, normalizedBrandName);
+    return normalizeSourceSuggestion(value, brandNames);
+  }
+  return normalizeCachedSuggestion(value);
 }
 
 function matchScore(text, token, weight) {
@@ -174,8 +217,7 @@ function matchScore(text, token, weight) {
   return 40 + weight;
 }
 
-function scoreSuggestion(suggestion, query) {
-  const tokens = comparable(query).split(' ').filter(Boolean);
+function scoreSuggestion(suggestion, tokens, wholeQuery) {
   const fields = [
     [comparable(suggestion.colorName), 30],
     [comparable(suggestion.manufacturer), 20],
@@ -190,28 +232,24 @@ function scoreSuggestion(suggestion, query) {
     score += best;
   }
 
-  const wholeQuery = comparable(query);
   const label = comparable(suggestion.label);
   if (label === wholeQuery) score += 300;
   else if (label.startsWith(wholeQuery)) score += 100;
   else if (label.includes(wholeQuery)) score += 50;
-  return { score, matched, tokenCount: tokens.length };
+  return { score, matched };
 }
 
-function rankSuggestions(values, query, { requireAllTokens = false } = {}) {
-  const unique = new Map();
-  for (const value of values) {
-    const suggestion = normalizeSuggestion(value);
-    if (suggestion && !unique.has(suggestion.id)) unique.set(suggestion.id, suggestion);
-  }
-  return [...unique.values()]
-    .map((suggestion) => ({ suggestion, ...scoreSuggestion(suggestion, query) }))
-    .filter((entry) => !requireAllTokens || entry.matched === entry.tokenCount)
+function rankSuggestions(values, query) {
+  const wholeQuery = comparable(query);
+  const tokens = wholeQuery.split(' ').filter(Boolean);
+  if (!tokens.length) return [];
+  return values
+    .map((suggestion) => ({ suggestion, ...scoreSuggestion(suggestion, tokens, wholeQuery) }))
+    .filter((entry) => entry.matched === tokens.length)
     .sort((left, right) =>
-      right.matched - left.matched ||
       right.score - left.score ||
       left.suggestion.label.localeCompare(right.suggestion.label) ||
-      left.suggestion.id - right.suggestion.id)
+      left.suggestion.id.localeCompare(right.suggestion.id))
     .slice(0, MAX_SUGGESTIONS)
     .map((entry) => entry.suggestion);
 }
@@ -227,23 +265,11 @@ function cloneSuggestions(suggestions) {
   return suggestions.map((suggestion) => ({ ...suggestion }));
 }
 
-function cloneSearchResult(result) {
-  return {
-    suggestions: cloneSuggestions(result.suggestions),
-    stale: result.stale,
-    unavailable: result.unavailable,
-  };
-}
-
 function createAbortError() {
   const error = new Error('The operation was aborted');
   error.name = 'AbortError';
   error.code = 'ABORT_ERR';
   return error;
-}
-
-function isAbortError(error) {
-  return error?.name === 'AbortError' || error?.code === 'ABORT_ERR';
 }
 
 function validateAbortSignal(signal) {
@@ -259,24 +285,67 @@ function throwIfAborted(signal) {
   if (signal?.aborted) throw createAbortError();
 }
 
-function parseApiResponse(response) {
+function waitForPromise(promise, signal) {
+  if (!signal) return promise;
+  throwIfAborted(signal);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      callback(value);
+    };
+    const onAbort = () => finish(reject, createAbortError());
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    promise.then(
+      (value) => finish(resolve, value),
+      (error) => finish(reject, error),
+    );
+  });
+}
+
+function parseJsonArray(response, { maximumBytes, maximumEntries }) {
   if (!response || typeof response !== 'object' || Number(response.status) !== 200) {
     const status = response && Number(response.status);
-    throw new Error(status === 429 ? 'upstream rate limited' : `upstream status ${status || 'unknown'}`);
+    throw new Error(`upstream status ${status || 'unknown'}`);
   }
   let body = response.body;
   if (Buffer.isBuffer(body)) {
-    if (body.length > MAX_RESPONSE_BYTES) throw new Error('upstream response too large');
+    if (body.length > maximumBytes) throw new Error('upstream response too large');
     body = body.toString('utf8');
   }
   if (typeof body === 'string') {
-    if (Buffer.byteLength(body, 'utf8') > MAX_RESPONSE_BYTES) throw new Error('upstream response too large');
+    if (Buffer.byteLength(body, 'utf8') > maximumBytes) {
+      throw new Error('upstream response too large');
+    }
     body = JSON.parse(body);
   }
-  if (!body || typeof body !== 'object' || Array.isArray(body) || !Array.isArray(body.results)) {
+  if (!Array.isArray(body) || body.length > maximumEntries) {
     throw new Error('upstream response schema invalid');
   }
-  return body.results.slice(0, MAX_UPSTREAM_RESULTS);
+  return body;
+}
+
+function normalizeDataset(materialValues, brandValues, minimumEntries) {
+  const brandNames = new Map();
+  for (const raw of brandValues) {
+    const brand = normalizeBrand(raw);
+    if (brand && !brandNames.has(brand.slug)) brandNames.set(brand.slug, brand.name);
+  }
+  if (!brandNames.size) throw new Error('upstream brand index contains no usable entries');
+
+  const unique = new Map();
+  for (const raw of materialValues) {
+    const suggestion = normalizeSourceSuggestion(raw, brandNames);
+    if (suggestion && !unique.has(suggestion.id)) unique.set(suggestion.id, suggestion);
+  }
+  if (unique.size < minimumEntries) throw new Error('upstream material dataset is unexpectedly small');
+  return [...unique.values()].sort((left, right) => left.id.localeCompare(right.id));
 }
 
 function createFilamentCatalog(options = {}) {
@@ -289,23 +358,30 @@ function createFilamentCatalog(options = {}) {
   const dataFile = options.dataFile;
   const logger = options.logger || console;
   const now = typeof options.now === 'function' ? options.now : Date.now;
-  const sleep = typeof options.sleep === 'function'
-    ? options.sleep
-    : (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
   const timeoutMs = finiteInteger(options.timeoutMs, DEFAULT_TIMEOUT_MS, 250, 30000);
-  const minIntervalMs = finiteInteger(
-    options.minIntervalMs,
-    MIN_REQUEST_INTERVAL_MS,
-    MIN_REQUEST_INTERVAL_MS,
-    60 * 1000,
+  const cacheTtlMs = finiteInteger(
+    options.cacheTtlMs,
+    DEFAULT_CACHE_TTL_MS,
+    0,
+    30 * 24 * 60 * 60 * 1000,
   );
-  const cacheTtlMs = finiteInteger(options.cacheTtlMs, DEFAULT_CACHE_TTL_MS, 0, 30 * 24 * 60 * 60 * 1000);
-  const maxQueries = finiteInteger(options.maxQueries, DEFAULT_MAX_QUERIES, 1, 1000);
-  const cache = new Map();
-  const inFlight = new Map();
-  const requestQueue = [];
-  let activeRequest = null;
-  let lastRequestStart = null;
+  const retryCooldownMs = finiteInteger(
+    options.retryCooldownMs,
+    DEFAULT_RETRY_COOLDOWN_MS,
+    0,
+    24 * 60 * 60 * 1000,
+  );
+  const minimumEntries = finiteInteger(
+    options.minDatasetEntries,
+    DEFAULT_MIN_DATASET_ENTRIES,
+    1,
+    MAX_MATERIAL_ENTRIES,
+  );
+  let suggestions = [];
+  let checkedAt = 0;
+  let nextRetryAt = 0;
+  let lastRefreshFailed = false;
+  let refreshPromise = null;
 
   const timeNow = () => {
     const value = Number(now());
@@ -318,241 +394,93 @@ function createFilamentCatalog(options = {}) {
     } catch { /* logging must not break manual fallback */ }
   };
 
-  function pruneCache() {
-    const ordered = [...cache.entries()].sort((left, right) =>
-      right[1].savedAt - left[1].savedAt || left[0].localeCompare(right[0]));
-    cache.clear();
-    for (const [key, entry] of ordered.slice(0, maxQueries)) cache.set(key, entry);
-  }
-
-  function loadCache() {
-    const saved = readJsonWithBackup(dataFile, null);
-    if (!saved || saved.version !== CACHE_VERSION || !Array.isArray(saved.queries)) return;
-    const current = timeNow();
-    for (const raw of saved.queries.slice(0, 5000)) {
-      if (!raw || typeof raw !== 'object') continue;
-      const query = normalizeCatalogQuery(raw.query);
-      const savedAt = Number(raw.savedAt);
-      if (!query || !Number.isFinite(savedAt) || savedAt < 0 || !Array.isArray(raw.suggestions)) continue;
-      const suggestions = rankSuggestions(raw.suggestions.slice(0, MAX_SUGGESTIONS), query);
-      const key = queryKey(query);
-      const entry = { query, savedAt: Math.min(savedAt, current), suggestions };
-      const existing = cache.get(key);
-      if (!existing || existing.savedAt < entry.savedAt) cache.set(key, entry);
+  function normalizeSavedCache(saved) {
+    if (!saved || saved.version !== CACHE_VERSION || saved.source !== SOURCE_URL ||
+        !Array.isArray(saved.suggestions) || saved.suggestions.length > MAX_MATERIAL_ENTRIES) {
+      return null;
     }
-    pruneCache();
+    const unique = new Map();
+    for (const raw of saved.suggestions) {
+      const suggestion = normalizeCachedSuggestion(raw);
+      if (suggestion && !unique.has(suggestion.id)) unique.set(suggestion.id, suggestion);
+    }
+    if (unique.size < minimumEntries) return null;
+    const savedAt = Number(saved.checkedAt);
+    return {
+      suggestions: [...unique.values()].sort((left, right) => left.id.localeCompare(right.id)),
+      checkedAt: Number.isFinite(savedAt) && savedAt >= 0 ? Math.min(savedAt, timeNow()) : 0,
+    };
   }
 
   function persistCache() {
-    pruneCache();
-    const queries = [...cache.values()]
-      .sort((left, right) => right.savedAt - left.savedAt || left.query.localeCompare(right.query))
-      .map((entry) => ({
-        query: entry.query,
-        savedAt: entry.savedAt,
-        suggestions: cloneSuggestions(entry.suggestions),
-      }));
-    try { writeJsonAtomic(dataFile, { version: CACHE_VERSION, queries }); }
-    catch { warn('filament_catalog_cache_write_failed'); }
-  }
-
-  function putCache(query, suggestions) {
-    const key = queryKey(query);
-    cache.delete(key);
-    cache.set(key, { query, savedAt: timeNow(), suggestions: cloneSuggestions(suggestions) });
-    persistCache();
-  }
-
-  function fallbackFor(query) {
-    const exact = cache.get(queryKey(query));
-    if (exact) {
-      return { suggestions: cloneSuggestions(exact.suggestions), stale: true, unavailable: true };
-    }
-    const allSuggestions = [];
-    for (const entry of cache.values()) allSuggestions.push(...entry.suggestions);
-    const suggestions = rankSuggestions(allSuggestions, query, { requireAllTokens: true });
-    if (suggestions.length) {
-      return { suggestions: cloneSuggestions(suggestions), stale: true, unavailable: true };
-    }
-    return { suggestions: [], stale: false, unavailable: true };
-  }
-
-  async function waitForInterval(milliseconds, signal) {
-    throwIfAborted(signal);
-    let onAbort;
-    const aborted = new Promise((resolve, reject) => {
-      onAbort = () => reject(createAbortError());
-      signal.addEventListener('abort', onAbort, { once: true });
-      if (signal.aborted) onAbort();
-    });
     try {
-      await Promise.race([
-        Promise.resolve().then(() => sleep(milliseconds)),
-        aborted,
+      writeJsonAtomic(dataFile, {
+        version: CACHE_VERSION,
+        source: SOURCE_URL,
+        checkedAt,
+        suggestions: cloneSuggestions(suggestions),
+      });
+    } catch {
+      warn('filament_catalog_cache_write_failed');
+    }
+  }
+
+  function loadCache() {
+    const saved = readJsonValidatedWithBackup(dataFile, normalizeSavedCache, null);
+    if (!saved) return;
+    suggestions = saved.suggestions;
+    checkedAt = saved.checkedAt;
+  }
+
+  function cacheIsFresh() {
+    if (!suggestions.length || cacheTtlMs <= 0) return false;
+    return Math.max(0, timeNow() - checkedAt) < cacheTtlMs;
+  }
+
+  function fixedRequest(path, maximumBytes) {
+    return request(API_HOST, {
+      method: 'GET',
+      path,
+      headers: { Accept: 'application/json', 'User-Agent': USER_AGENT },
+    }, null, timeoutMs, { maxResponseBytes: maximumBytes });
+  }
+
+  function refreshDataset() {
+    if (refreshPromise) return refreshPromise;
+    if (timeNow() < nextRetryAt) return Promise.resolve(false);
+    refreshPromise = Promise.resolve().then(async () => {
+      const [materialsResponse, brandsResponse] = await Promise.all([
+        fixedRequest(MATERIALS_PATH, MAX_MATERIAL_RESPONSE_BYTES),
+        fixedRequest(BRANDS_PATH, MAX_BRAND_RESPONSE_BYTES),
       ]);
-    } finally {
-      signal.removeEventListener('abort', onAbort);
-    }
-    throwIfAborted(signal);
-  }
-
-  function settleRequestJob(job, settle, value) {
-    if (job.state === 'settled') return;
-    job.state = 'settled';
-    job.signal.removeEventListener('abort', job.onAbort);
-    settle(value);
-  }
-
-  function pumpRequestQueue() {
-    if (activeRequest) return;
-    const job = requestQueue.shift();
-    if (!job) return;
-    if (job.state !== 'queued') {
-      pumpRequestQueue();
-      return;
-    }
-
-    activeRequest = job;
-    job.state = 'active';
-    Promise.resolve()
-      .then(async () => {
-        throwIfAborted(job.signal);
-        const current = timeNow();
-        if (lastRequestStart != null) {
-          const elapsed = Math.max(0, current - lastRequestStart);
-          const waitMs = Math.max(0, minIntervalMs - elapsed);
-          if (waitMs) await waitForInterval(waitMs, job.signal);
-        }
-        throwIfAborted(job.signal);
-        const observed = timeNow();
-        lastRequestStart = lastRequestStart == null
-          ? observed
-          : Math.max(observed, lastRequestStart + minIntervalMs);
-        return job.task();
-      })
-      .then(
-        (result) => settleRequestJob(job, job.resolve, result),
-        (error) => settleRequestJob(job, job.reject, error),
-      )
-      .finally(() => {
-        if (activeRequest === job) activeRequest = null;
-        pumpRequestQueue();
+      const materialValues = parseJsonArray(materialsResponse, {
+        maximumBytes: MAX_MATERIAL_RESPONSE_BYTES,
+        maximumEntries: MAX_MATERIAL_ENTRIES,
       });
-  }
-
-  function scheduleRequest(signal, task) {
-    return new Promise((resolve, reject) => {
-      const job = {
-        signal,
-        task,
-        resolve,
-        reject,
-        state: 'queued',
-        onAbort: null,
-      };
-      job.onAbort = () => {
-        if (job.state !== 'queued') return;
-        const index = requestQueue.indexOf(job);
-        if (index >= 0) requestQueue.splice(index, 1);
-        settleRequestJob(job, reject, createAbortError());
-      };
-      signal.addEventListener('abort', job.onAbort, { once: true });
-      if (signal.aborted) {
-        job.onAbort();
-        return;
-      }
-      requestQueue.push(job);
-      pumpRequestQueue();
-    });
-  }
-
-  async function fetchSuggestions(query, signal) {
-    return scheduleRequest(signal, async () => {
-      throwIfAborted(signal);
-      const response = await request(API_HOST, {
-        method: 'GET',
-        path: `/api/swatch/?q=${encodeURIComponent(query)}&page_size=${API_PAGE_SIZE}`,
-        headers: {
-          Accept: 'application/json',
-          'User-Agent': USER_AGENT,
-        },
-        signal,
-      }, null, timeoutMs);
-      throwIfAborted(signal);
-      const suggestions = rankSuggestions(parseApiResponse(response), query);
-      putCache(query, suggestions);
-      return { suggestions: cloneSuggestions(suggestions), stale: false, unavailable: false };
-    });
-  }
-
-  function createWork(query, key) {
-    const controller = new AbortController();
-    const work = {
-      key,
-      query,
-      controller,
-      consumers: 0,
-      settled: false,
-      promise: null,
-    };
-    work.promise = fetchSuggestions(query, controller.signal)
-      .catch((error) => {
-        if (controller.signal.aborted || isAbortError(error)) return ABORTED_WORK;
-        warn('filament_catalog_upstream_unavailable');
-        return fallbackFor(query);
-      })
-      .finally(() => {
-        work.settled = true;
-        if (inFlight.get(key) === work) inFlight.delete(key);
+      const brandValues = parseJsonArray(brandsResponse, {
+        maximumBytes: MAX_BRAND_RESPONSE_BYTES,
+        maximumEntries: MAX_BRAND_ENTRIES,
       });
-    return work;
-  }
-
-  function cancelWork(work) {
-    if (work.settled || work.controller.signal.aborted) return;
-    if (inFlight.get(work.key) === work) inFlight.delete(work.key);
-    work.controller.abort();
-  }
-
-  function consumeWork(work, signal) {
-    if (signal?.aborted) return Promise.reject(createAbortError());
-    work.consumers += 1;
-    return new Promise((resolve, reject) => {
-      let finished = false;
-      const detach = () => {
-        if (finished) return false;
-        finished = true;
-        if (signal) signal.removeEventListener('abort', onAbort);
-        work.consumers = Math.max(0, work.consumers - 1);
-        return true;
-      };
-      const onAbort = () => {
-        if (!detach()) return;
-        reject(createAbortError());
-        if (work.consumers === 0) cancelWork(work);
-      };
-
-      if (signal) {
-        signal.addEventListener('abort', onAbort, { once: true });
-        if (signal.aborted) {
-          onAbort();
-          return;
-        }
-      }
-
-      work.promise.then(
-        (result) => {
-          if (!detach()) return;
-          if (result === ABORTED_WORK) reject(createAbortError());
-          else resolve(cloneSearchResult(result));
-        },
-        (error) => {
-          if (!detach()) return;
-          if (work.controller.signal.aborted || isAbortError(error)) reject(createAbortError());
-          else reject(error);
-        },
-      );
+      const nextSuggestions = normalizeDataset(materialValues, brandValues, minimumEntries);
+      suggestions = nextSuggestions;
+      checkedAt = timeNow();
+      nextRetryAt = 0;
+      lastRefreshFailed = false;
+      persistCache();
+      return true;
+    }).catch(() => {
+      nextRetryAt = timeNow() + retryCooldownMs;
+      lastRefreshFailed = true;
+      warn('filament_catalog_refresh_failed');
+      return false;
+    }).finally(() => {
+      refreshPromise = null;
     });
+    return refreshPromise;
+  }
+
+  function warm() {
+    return cacheIsFresh() ? Promise.resolve(true) : refreshDataset();
   }
 
   async function search(value, { signal } = {}) {
@@ -560,32 +488,28 @@ function createFilamentCatalog(options = {}) {
     throwIfAborted(signal);
     const query = normalizeCatalogQuery(value);
     if (!query) return { suggestions: [], stale: false, unavailable: false };
-    const key = queryKey(query);
-    const cached = cache.get(key);
-    if (cached && cacheTtlMs > 0 && timeNow() - cached.savedAt < cacheTtlMs) {
-      return cloneSearchResult({
-        suggestions: cached.suggestions,
-        stale: false,
-        unavailable: false,
-      });
+
+    if (suggestions.length) {
+      const stale = !cacheIsFresh();
+      if (stale) void refreshDataset();
+      return {
+        suggestions: cloneSuggestions(rankSuggestions(suggestions, query)),
+        stale,
+        unavailable: stale && lastRefreshFailed,
+      };
     }
-    let active = inFlight.get(key);
-    if (active?.controller.signal.aborted) {
-      if (inFlight.get(key) === active) inFlight.delete(key);
-      active = null;
-    }
-    if (active) return consumeWork(active, signal);
-    if (inFlight.size >= MAX_PENDING_QUERIES) {
-      warn('filament_catalog_queue_full');
-      return fallbackFor(query);
-    }
-    const work = createWork(query, key);
-    inFlight.set(key, work);
-    return consumeWork(work, signal);
+
+    const refreshed = await waitForPromise(refreshDataset(), signal);
+    throwIfAborted(signal);
+    return {
+      suggestions: cloneSuggestions(rankSuggestions(suggestions, query)),
+      stale: false,
+      unavailable: !refreshed,
+    };
   }
 
   loadCache();
-  return { search };
+  return { search, warm };
 }
 
 module.exports = {

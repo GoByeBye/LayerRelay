@@ -44,7 +44,7 @@ refresh token, which may carry broader account permissions; see the
 - Nozzle, bed, chamber, and room temperatures
 - Active tool, configured spool name/colour, and the next tool change
 - Automatic tool count and loaded/material inventory from Prusa Connect, with
-  optional per-field dashboard overrides and FilamentColors.xyz suggestions
+  optional per-field dashboard overrides and locally cached OpenPrintTag suggestions
 - Layer, speed, flow, hotend fan, tool-swap count, purge waste, and filament estimate
 - Tool-change ticks on the progress bar, decoded from the active `.bgcode`
 - Last-known values during a printer or cloud outage, visibly marked as stale/offline
@@ -64,7 +64,7 @@ refresh token, which may carry broader account permissions; see the
 | Camera | No | Integrated video requires a reachable `rtsp://` or `rtsps://` stream. Without one, telemetry and the transparent overlay still work and the camera relay remains off. |
 | FFmpeg | Camera relay/snapshot only | Native installs need FFmpeg at `cameraFfmpegPath` or on `PATH` for the relay and snapshot helper. The Docker image includes FFmpeg. |
 | OBS Studio | No | Needed only for an OBS Browser Source. No minimum OBS version is claimed. Use 1920 x 1080 for the full dashboard or 1920 x 420 for the camera-free lower third. A normal browser can display the dashboard without OBS. |
-| Network access | Yes | The host must reach PrusaLink and, when enabled, the RTSP camera. Prusa Connect, optional Netatmo, and optional filament suggestions require outbound internet access; manual tool editing remains usable without catalog access. Typed picker searches are sent by the server to FilamentColors.xyz. |
+| Network access | Yes | The host must reach PrusaLink and, when enabled, the RTSP camera. Prusa Connect, optional Netatmo, the first use of OpenPrintTag suggestions, and catalog refreshes after the 24-hour cache TTL require outbound internet access. LayerRelay's fixed catalog requests never include picker text; searches run against its normalized local index. Manual tool editing remains usable without catalog access. |
 
 Clone the repository and enter its directory first:
 
@@ -101,8 +101,9 @@ when that inventory is available. Count, presence, name, and colour can be
 overridden independently; count, presence, and type can be returned to
 **Auto** later, while **Auto type** preserves the selected colour. Changes take
 effect without restarting the server. Filament suggestions are optional;
-custom names and colours remain usable when the external catalog is slow or
-unavailable.
+they search a normalized local suggestion index derived from the OpenPrintTag
+material and brand snapshots. Custom names and colours remain usable before the
+first successful refresh or whenever the cached index is unavailable.
 
 ## Configuration
 
@@ -226,7 +227,7 @@ not an extrusion timeline.
 | `bgcode.js` | `.bgcode` container and G-code decoder |
 | `toolswaps.js` | Tool/swap/layer/waste timeline builder |
 | `tool-settings.js` | Validated, immediately applied tool inventory persisted under `DATA_DIR` |
-| `filament-catalog.js` | Bounded, cached proxy for optional FilamentColors.xyz suggestions |
+| `filament-catalog.js` | Persistent local suggestion index derived from the public OpenPrintTag material and brand snapshots |
 | `public/overlay.html` | Self-contained overlay UI; browser requests remain same-origin |
 | `tools/` | Guarded restart, camera snapshot, and Connect token-display helpers |
 

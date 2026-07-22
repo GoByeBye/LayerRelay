@@ -20,22 +20,46 @@ disclosure is informational: it does not change the project's
 disclosure is not a substitute for documenting the source and license of copied,
 adapted, generated, or vendored material.
 
-## FilamentColors.xyz data
+## OpenPrintTag Material Database data
 
-The optional filament picker queries the public
-[`FilamentColors.xyz`](https://filamentcolors.xyz/) API and normalizes a small
-subset of its swatch data for display. FilamentColors.xyz is created and
-maintained by Joe Kaufeld. Its production images, text, and data are licensed
-under the [Creative Commons Attribution 4.0 International license](https://creativecommons.org/licenses/by/4.0/).
+The optional filament picker downloads the generated public material and brand
+snapshots from the
+[`OpenPrintTag Material Database`](https://database.openprinttag.org/), whose
+source is maintained in the
+[`OpenPrintTag/openprinttag-database`](https://github.com/OpenPrintTag/openprinttag-database)
+repository. OpenPrintTag is an open-source initiative by Prusa Research, and
+the database is community-driven.
 
-LayerRelay uses only the manufacturer, material, colour name, measured hex
-colour, stable swatch identifier, and detail-page slug returned for an explicit
-search. It does not redistribute the upstream image library or purchase links.
-Picker text is sent by the LayerRelay server to the FilamentColors.xyz API as a
-search query. Normalized suggestions and their bounded search terms are cached
-locally, may be unavailable, and are never required for manual tool
-configuration. Upstream data is normalized into LayerRelay's existing tool-slot
-shape; FilamentColors.xyz does not endorse LayerRelay.
+LayerRelay keeps the material and brand slugs, brand name, FFF type, a bounded
+display name derived from the material name, and a six-digit primary RGB colour
+when the source colour is fully opaque. It does not cache upstream photos,
+package details, purchase links, or material properties. LayerRelay searches
+the normalized local index and does not include picker text in requests to
+OpenPrintTag or in its persisted catalog cache. The index may be stale,
+incomplete, or unavailable and is never required for manual tool configuration.
+Upstream data is normalized into LayerRelay's existing tool-slot shape. No
+endorsement by Prusa Research or OpenPrintTag is implied.
+
+The upstream database is distributed under the MIT License:
+
+Copyright 2025 PRUSA RESEARCH A.S.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ## Prusa libbgcode provenance
 

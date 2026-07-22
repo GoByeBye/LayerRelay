@@ -380,7 +380,8 @@ test('dashboard controls offer corresponding source without adding a passive ove
   assert.equal(sourceLink.getAttribute('rel'), 'noopener');
   assert.match(html, /Source &amp; AGPL license/);
   assert.match(html, /Tools &amp; filament/);
-  assert.match(html, /Search text is sent by this server to[\s\S]+FilamentColors\.xyz[\s\S]+Joe Kaufeld[\s\S]+CC BY 4\.0[\s\S]+normalized by LayerRelay/);
+  assert.match(html, /OpenPrintTag Material Database[\s\S]+does not include your search text in requests to OpenPrintTag or in its persisted catalog cache[\s\S]+Copyright 2025 PRUSA RESEARCH A\.S\.[\s\S]+MIT License/);
+  assert.doesNotMatch(html, /FilamentColors\.xyz|Joe Kaufeld|CC BY 4\.0/);
 });
 
 test('job-map identities tolerate casing differences between local and cloud filenames', () => {

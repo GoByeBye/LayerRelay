@@ -21,8 +21,8 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A CI gate that installs and verifies the exact tracked source archive
 - A dashboard tool-and-filament editor with Prusa Connect-derived automatic
   inventory, independent count/presence/name/colour overrides, Auto reset for
-  count/presence/type, persistent settings, and optional FilamentColors.xyz
-  type-ahead suggestions
+  count/presence/type, persistent settings, and local type-ahead over a
+  normalized OpenPrintTag suggestion index
 
 ### Changed
 

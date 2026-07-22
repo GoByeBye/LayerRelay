@@ -118,14 +118,20 @@ host, and optional non-default port, with no path) to
 `toolSettingsAllowedOrigins`. This explicit allowlist prevents DNS rebinding
 from turning an unrelated public hostname into a local settings writer.
 
-Text typed into a filament-name field is sent by the server through a bounded
-same-origin proxy to the
-public [FilamentColors.xyz API](https://github.com/itsthejoker/filamentcolors.xyz#public-api).
-Small normalized results and their bounded search terms may be cached under
-`DATA_DIR`; no upstream images or purchase links are stored. The catalog is
-optional and can be slow, unavailable, or change independently. Manual names
-and six-digit hex colours remain fully usable in every case. See
-[NOTICE.md](../NOTICE.md) for attribution and license details.
+The first valid picker search downloads the public read-only
+[OpenPrintTag Material Database](https://database.openprinttag.org/) material
+and brand snapshots when no local suggestion index exists. LayerRelay keeps
+only bounded filament identity, type, and colour fields and persists that
+normalized index at `DATA_DIR/filament-catalog-cache.json`. Once the index is
+more than 24 hours old, the next picker search serves it immediately and starts
+one background refresh.
+
+LayerRelay's fixed OpenPrintTag requests do not include picker text, and the
+persisted catalog cache does not contain search queries. The index can be stale,
+unavailable, or change independently; manual names and six-digit hex colours
+remain fully usable before the first successful refresh and during outages.
+LayerRelay does not persist linked product photos, package data, properties, or
+purchase URLs. See [NOTICE.md](../NOTICE.md) for attribution and license details.
 
 ## Camera settings
 
