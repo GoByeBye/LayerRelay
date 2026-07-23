@@ -22,7 +22,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A dashboard tool-and-filament editor with Prusa Connect-derived automatic
   inventory, independent count/presence/name/colour overrides, Auto reset for
   count/presence/type, persistent settings, and local type-ahead over a
-  normalized OpenPrintTag suggestion index
+  normalized OpenPrintTag suggestion index loaded by `openprinttag-index.js`
 
 ### Changed
 
@@ -35,8 +35,11 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   transport cannot permanently stall polling
 - Prusa Connect asset work is serialized by active job, cancels stale downloads,
   retries incomplete descriptors, and rejects invalid `.bgcode` payloads
-- Local filament type-ahead pre-indexes normalized search fields and uses a
-  100 ms input debounce for near-realtime suggestions
+- Startup loads the last valid OpenPrintTag snapshot, refreshes missing or stale
+  data in the background, and serves synchronous local searches without
+  persisting picker queries
+- Local filament type-ahead uses a 100 ms input debounce for near-realtime
+  suggestions
 
 ### Removed
 

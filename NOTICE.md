@@ -22,7 +22,7 @@ adapted, generated, or vendored material.
 
 ## OpenPrintTag Material Database data
 
-The optional filament picker downloads the generated public material and brand
+The optional filament picker refreshes generated public material and brand
 snapshots from the
 [`OpenPrintTag Material Database`](https://database.openprinttag.org/), whose
 source is maintained in the
@@ -30,15 +30,15 @@ source is maintained in the
 repository. OpenPrintTag is an open-source initiative by Prusa Research, and
 the database is community-driven.
 
-LayerRelay keeps the material and brand slugs, brand name, FFF type, a bounded
-display name derived from the material name, and a six-digit primary RGB colour
-when the source colour is fully opaque. It does not cache upstream photos,
-package details, purchase links, or material properties. LayerRelay searches
-the normalized local index and does not include picker text in requests to
-OpenPrintTag or in its persisted catalog cache. The index may be stale,
-incomplete, or unavailable and is never required for manual tool configuration.
-Upstream data is normalized into LayerRelay's existing tool-slot shape. No
-endorsement by Prusa Research or OpenPrintTag is implied.
+LayerRelay keeps only bounded FFF identity and display fields plus a six-digit
+primary RGB colour when the source colour is fully opaque. It does not cache
+upstream photos, package details, purchase links, or material properties.
+LayerRelay searches its normalized local snapshot synchronously. Picker text is
+not included in requests to OpenPrintTag or persisted in
+`openprinttag-materials-v1.json`. The snapshot may be stale, incomplete, or
+unavailable and is never required for manual tool configuration. Upstream data
+is normalized into LayerRelay's existing tool-slot shape. No endorsement by
+Prusa Research or OpenPrintTag is implied.
 
 The upstream database is distributed under the MIT License:
 

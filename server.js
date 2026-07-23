@@ -43,7 +43,7 @@ const {
   resolveToolSettings,
   restoreCachedConnectToolInventory,
 } = require('./tool-settings.js');
-const { createFilamentCatalog } = require('./filament-catalog.js');
+const { createOpenPrintTagIndex } = require('./openprinttag-index.js');
 const {
   readJsonDetailed,
   readJsonValidatedWithBackup,
@@ -70,11 +70,12 @@ const toolSettingsStore = createToolSettingsStore({
   defaults: { toolCount: cfg.toolCount, toolSlots: cfg.toolSlots },
   logger: console,
 });
-const filamentCatalog = createFilamentCatalog({
-  dataFile: path.join(CACHE_DIR, 'filament-catalog-cache.json'),
+const openPrintTagIndex = createOpenPrintTagIndex({
+  dataFile: path.join(CACHE_DIR, 'openprinttag-materials-v1.json'),
   request: createHttpsRequest({ maxResponseBytes: 512 * 1024 }),
   logger: console,
 });
+void openPrintTagIndex.refresh();
 const ANALYSIS_CACHE_OPTIONS = Object.freeze({
   maxEntries: cfg.analysisCacheMaxEntries,
   maxBytes: cfg.analysisCacheMaxBytes,
@@ -1085,24 +1086,13 @@ app.put('/api/settings/tools', sameOriginSettingsWrite, (req, res) => {
   }
 });
 
-app.get('/api/filaments', async (req, res) => {
+app.get('/api/filaments', (req, res) => {
   const query = typeof req.query.q === 'string' ? req.query.q : '';
-  const controller = new AbortController();
-  const abort = () => controller.abort();
-  const abortIfUnfinished = () => { if (!res.writableEnded) controller.abort(); };
-  req.once('aborted', abort);
-  res.once('close', abortIfUnfinished);
   try {
-    const payload = await filamentCatalog.search(query, { signal: controller.signal });
-    if (!res.destroyed && !res.headersSent) return res.json(payload);
+    return res.json(openPrintTagIndex.search(query));
   } catch {
-    if (!controller.signal.aborted) console.error('[filament-catalog] unexpected search failure');
-    if (!res.destroyed && !res.headersSent) {
-      return res.json({ suggestions: [], stale: false, unavailable: true });
-    }
-  } finally {
-    req.off('aborted', abort);
-    res.off('close', abortIfUnfinished);
+    console.error('[openprinttag-index] unexpected search failure');
+    return res.json({ suggestions: [], stale: false, unavailable: true, loading: false });
   }
 });
 

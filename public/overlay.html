@@ -226,7 +226,6 @@
   .filament-option:hover, .filament-option.active { background: rgba(255, 255, 255, 0.1); }
   .filament-swatch { width: 14px; height: 14px; border: 1px solid rgba(255, 255, 255, 0.28); border-radius: 50%; }
   .filament-option-name { display: block; overflow: hidden; color: #fff; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-  .filament-option-meta { display: block; margin-top: 2px; overflow: hidden; color: #9fa6b1; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
   .filament-feedback { min-height: 14px; margin-top: 4px; color: #9fa6b1; font-size: 10px; line-height: 1.35; }
   #tool-editor-status { min-height: 17px; margin: 9px 0 0; color: #b9bfc9; font-size: 11px; line-height: 1.45; }
   #tool-editor-status.error { color: #ff9b9f; }
@@ -536,10 +535,9 @@
         <button id="tool-editor-save" class="control-action" type="submit">Save</button>
       </div>
       <p class="tool-editor-attribution">
-        Suggestions search a normalized local index derived from the
-        <a href="https://database.openprinttag.org/" target="_blank" rel="noopener">OpenPrintTag Material Database</a>.
-        LayerRelay does not include your search text in requests to OpenPrintTag or in its persisted catalog cache.
-        Copyright 2025 PRUSA RESEARCH A.S.,
+        Suggestions from the
+        <a href="https://database.openprinttag.org/" target="_blank" rel="noopener">OpenPrintTag Material Database</a>
+        are searched on this server.
         <a href="https://github.com/OpenPrintTag/openprinttag-database/blob/main-pr/LICENSE"
           target="_blank" rel="noopener">MIT License</a>.
       </p>
@@ -1141,13 +1139,8 @@
     var label = typeof value.label === 'string' ? value.label.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 80) : '';
     if (!label) return null;
     return {
-      id: value.id == null ? label : String(value.id),
       label: label,
-      manufacturer: typeof value.manufacturer === 'string' ? value.manufacturer.trim().slice(0, 80) : '',
-      material: typeof value.material === 'string' ? value.material.trim().slice(0, 40) : '',
-      colorName: typeof value.colorName === 'string' ? value.colorName.trim().slice(0, 80) : '',
       color: typeof value.color === 'string' && TOOL_COLOR_RE.test(value.color) ? value.color.toUpperCase() : null,
-      url: typeof value.url === 'string' ? value.url : null,
     };
   }
 
@@ -1192,9 +1185,6 @@
       if (suggestion.color) swatch.style.backgroundColor = suggestion.color;
       var copy = createEditorElement('span');
       copy.appendChild(createEditorElement('span', 'filament-option-name', suggestion.label));
-      var meta = [suggestion.manufacturer, suggestion.material, suggestion.colorName]
-        .filter(function (part, index, list) { return part && list.indexOf(part) === index; }).join(' · ');
-      if (meta) copy.appendChild(createEditorElement('span', 'filament-option-meta', meta));
       option.appendChild(swatch);
       option.appendChild(copy);
       bindFilamentOption(option, row, suggestion, i);
@@ -1203,16 +1193,20 @@
     }
     var unavailable = !!(payload && payload.unavailable);
     var stale = !!(payload && payload.stale);
+    var loading = !!(payload && payload.loading);
     if (row.suggestions.length) {
       row.listbox.hidden = false;
       row.input.setAttribute('aria-expanded', 'true');
       activeFilamentRow = row;
-      setText(row.feedback, stale ? 'Using cached catalog suggestions.' : row.suggestions.length + ' catalog suggestions.');
+      setText(row.feedback, stale && loading ? 'Using cached OpenPrintTag suggestions while the index refreshes.' :
+        stale ? 'Using cached OpenPrintTag suggestions.' :
+        row.suggestions.length + ' OpenPrintTag suggestions.');
     } else {
       closeFilamentOptions(row);
-      setText(row.feedback, unavailable ?
-        'Catalog unavailable — enter a custom filament name.' :
-        'No catalog match — this custom name can still be saved.');
+      setText(row.feedback, loading ?
+        'OpenPrintTag suggestions are loading — this custom name can still be saved.' :
+        unavailable ? 'OpenPrintTag suggestions unavailable — enter a custom filament name.' :
+        'No OpenPrintTag match — this custom name can still be saved.');
     }
   }
 
@@ -1223,7 +1217,7 @@
     return fetch(FILAMENT_SEARCH_URL + '?q=' + encodeURIComponent(query), {
       cache: 'no-store', signal: ctrl.signal,
     })
-      .then(function (response) { if (!response.ok) throw new Error('catalog unavailable'); return response.json(); })
+      .then(function (response) { if (!response.ok) throw new Error('OpenPrintTag unavailable'); return response.json(); })
       .then(function (payload) {
         if (seq !== filamentSearchSeq || !toolEditorOpen || row.input.value.trim() !== query) return;
         renderFilamentSuggestions(row, payload);
@@ -1253,7 +1247,7 @@
       setText(row.feedback, 'Type to search, or enter a custom filament name.');
       return Promise.resolve();
     }
-    setText(row.feedback, 'Searching filament catalog…');
+    setText(row.feedback, 'Searching OpenPrintTag…');
     return requestFilamentSuggestions(row, query, seq);
   }
 
@@ -1270,7 +1264,7 @@
       setText(row.feedback, 'Type to search, or enter a custom filament name.');
       return;
     }
-    setText(row.feedback, 'Searching filament catalog…');
+    setText(row.feedback, 'Searching OpenPrintTag…');
     filamentSearchTimer = setTimeout(function () {
       filamentSearchTimer = null;
       searchFilamentsNow(row, query);
@@ -1440,7 +1434,7 @@
       input.type = 'text';
       input.value = own(slot, 'name') ? slot.name : automaticField(label, 'name') || '';
       input.maxLength = 80;
-      input.placeholder = 'Search catalog or enter a custom name';
+      input.placeholder = 'Search OpenPrintTag or enter a custom name';
       input.setAttribute('role', 'combobox');
       input.setAttribute('aria-label', 'Tool ' + label + ' filament name');
       input.setAttribute('aria-autocomplete', 'list');

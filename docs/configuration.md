@@ -118,20 +118,21 @@ host, and optional non-default port, with no path) to
 `toolSettingsAllowedOrigins`. This explicit allowlist prevents DNS rebinding
 from turning an unrelated public hostname into a local settings writer.
 
-The first valid picker search downloads the public read-only
+At startup, `openprinttag-index.js` loads the last valid normalized snapshot
+from `DATA_DIR/openprinttag-materials-v1.json`. When that snapshot is missing or
+more than 24 hours old, it refreshes the public read-only
 [OpenPrintTag Material Database](https://database.openprinttag.org/) material
-and brand snapshots when no local suggestion index exists. LayerRelay keeps
-only bounded filament identity, type, and colour fields and persists that
-normalized index at `DATA_DIR/filament-catalog-cache.json`. Once the index is
-more than 24 hours old, the next picker search serves it immediately and starts
-one background refresh.
+and brand snapshots in the background. Refreshes use fixed upstream paths and
+never block manual tool configuration.
 
-LayerRelay's fixed OpenPrintTag requests do not include picker text, and the
-persisted catalog cache does not contain search queries. The index can be stale,
+`GET /api/filaments` synchronously searches the currently loaded in-memory
+index. Picker text is not included in OpenPrintTag requests or persisted in
+the snapshot. While the first snapshot is loading, the endpoint reports that
+state instead of claiming there are no matches. The index can be stale,
 unavailable, or change independently; manual names and six-digit hex colours
-remain fully usable before the first successful refresh and during outages.
-LayerRelay does not persist linked product photos, package data, properties, or
-purchase URLs. See [NOTICE.md](../NOTICE.md) for attribution and license details.
+remain fully usable during refreshes and outages. LayerRelay does not persist
+linked product photos, package data, properties, or purchase URLs. See
+[NOTICE.md](../NOTICE.md) for attribution and license details.
 
 ## Camera settings
 

@@ -380,8 +380,7 @@ test('dashboard controls offer corresponding source without adding a passive ove
   assert.equal(sourceLink.getAttribute('rel'), 'noopener');
   assert.match(html, /Source &amp; AGPL license/);
   assert.match(html, /Tools &amp; filament/);
-  assert.match(html, /OpenPrintTag Material Database[\s\S]+does not include your search text in requests to OpenPrintTag or in its persisted catalog cache[\s\S]+Copyright 2025 PRUSA RESEARCH A\.S\.[\s\S]+MIT License/);
-  assert.doesNotMatch(html, /FilamentColors\.xyz|Joe Kaufeld|CC BY 4\.0/);
+  assert.match(html, /OpenPrintTag Material Database[\s\S]+are searched on this server[\s\S]+MIT License/);
 });
 
 test('job-map identities tolerate casing differences between local and cloud filenames', () => {
@@ -599,11 +598,12 @@ test('ARIA picker creates name and color overrides without changing automatic pr
   assert.equal(customEnter.defaultPrevented, undefined);
   runtime.api.renderFilamentSuggestions(row, {
     suggestions: [{
-      id: 'safe-1', label: '<img src=x> Shimmer PETG', manufacturer: 'Prusament',
-      material: 'PETG', colorName: 'Violet', color: '#452060',
+      label: '<img src=x> Shimmer PETG', color: '#452060',
     }],
     stale: false, unavailable: false,
   });
+  assert.deepEqual(Object.keys(row.suggestions[0]).sort(), ['color', 'label']);
+  assert.equal(row.optionNodes[0].children[1].children.length, 1);
   assert.equal(row.input.getAttribute('role'), 'combobox');
   row.input.dispatch('keydown', { key: 'ArrowDown' });
   row.input.dispatch('keydown', { key: 'Enter' });
@@ -620,7 +620,7 @@ test('ARIA picker creates name and color overrides without changing automatic pr
   });
 });
 
-test('Auto type preserves the independently selected catalog color override', async () => {
+test('Auto type preserves the independently selected OpenPrintTag color override', async () => {
   const runtime = createRuntime({
     height: 420,
     toolSettings: makeToolSettingsView({
@@ -638,7 +638,7 @@ test('Auto type preserves the independently selected catalog color override', as
   assert.equal(row.nameAuto.textContent, 'Auto type');
 
   runtime.api.selectFilamentSuggestion(row, {
-    id: 'petg-violet', label: 'Shimmer PETG', material: 'PETG', color: '#452060',
+    label: 'Shimmer PETG', color: '#452060',
   });
   row.nameAuto.dispatch('click');
 
@@ -683,7 +683,7 @@ test('Auto type and presence reset cancel stale searches while preserving the co
   assert.equal(row.loaded.value, 'auto');
   assert.equal(row.listbox.hidden, true);
 
-  resolveOld({ suggestions: [{ id: 'old', label: 'Late result', color: '#000000' }] });
+  resolveOld({ suggestions: [{ label: 'Late result', color: '#000000' }] });
   await pending;
   assert.equal(row.input.value, 'Auto PLA');
   assert.equal(row.suggestions.length, 0);
@@ -695,7 +695,7 @@ test('Auto type and presence reset cancel stale searches while preserving the co
   });
 });
 
-test('custom values remain saveable while Connect and the catalog are unavailable', async () => {
+test('custom values remain saveable while Connect and OpenPrintTag suggestions are unavailable', async () => {
   const runtime = createRuntime({
     height: 420,
     toolSettings: makeToolSettingsView({
@@ -712,11 +712,11 @@ test('custom values remain saveable while Connect and the catalog are unavailabl
   row.input.dispatch('input');
   runtime.runTimers(100);
   await flushPromises();
-  assert.match(row.feedback.textContent, /Catalog unavailable/);
+  assert.match(row.feedback.textContent, /OpenPrintTag suggestions unavailable/);
   row.color.value = '#345678';
   row.color.dispatch('input');
   runtime.api.renderFilamentSuggestions(row, {
-    suggestions: [{ id: 'late', label: 'Late click PLA', color: '#999999' }],
+    suggestions: [{ label: 'Late click PLA', color: '#999999' }],
   });
   const lateOption = row.optionNodes[0];
 
@@ -738,7 +738,33 @@ test('custom values remain saveable while Connect and the catalog are unavailabl
   assert.equal(runtime.elements.get('tool-settings-summary').textContent, '1 tool · 0 loaded · Auto · fallback');
 });
 
-test('filament type-ahead searches the latest value after a 100 ms debounce', async () => {
+test('OpenPrintTag loading remains honest while manual values stay usable', async () => {
+  const runtime = createRuntime({
+    height: 420,
+    toolSettings: makeToolSettingsView({
+      detected: { source: 'connect', status: 'fresh', toolCount: 1, toolSlots: [] },
+    }),
+  });
+  runtime.api.openToolEditor();
+  await flushPromises();
+  const row = runtime.api.getToolEditorRows()[0];
+
+  runtime.api.renderFilamentSuggestions(row, {
+    suggestions: [], stale: false, unavailable: false, loading: true,
+  });
+  assert.match(row.feedback.textContent, /OpenPrintTag suggestions are loading/);
+  assert.doesNotMatch(row.feedback.textContent, /unavailable|No OpenPrintTag match/);
+  assert.equal(row.listbox.hidden, true);
+
+  runtime.api.renderFilamentSuggestions(row, {
+    suggestions: [{ label: 'Prusament PLA — Prusa Orange', color: '#F06A00' }],
+    stale: true, unavailable: false, loading: true,
+  });
+  assert.match(row.feedback.textContent, /cached OpenPrintTag suggestions while the index refreshes/);
+  assert.equal(row.listbox.hidden, false);
+});
+
+test('OpenPrintTag type-ahead searches the latest value after a 100 ms debounce', async () => {
   const runtime = createRuntime({
     height: 420,
     toolSettings: makeToolSettingsView({
@@ -764,7 +790,7 @@ test('filament type-ahead searches the latest value after a 100 ms debounce', as
   assert.equal(catalogCalls[0].url, '/api/filaments?q=petg');
 });
 
-test('a superseded catalog response cannot replace newer type-ahead results', async () => {
+test('a superseded OpenPrintTag response cannot replace newer type-ahead results', async () => {
   let resolveOld;
   const oldPayload = new Promise((resolve) => { resolveOld = resolve; });
   let requestCount = 0;
@@ -774,7 +800,7 @@ test('a superseded catalog response cannot replace newer type-ahead results', as
     filamentPayload() {
       requestCount++;
       return requestCount === 1 ? oldPayload : {
-        suggestions: [{ id: 'new', label: 'New result PETG', color: '#123456' }],
+        suggestions: [{ label: 'New result PETG', color: '#123456' }],
         stale: false, unavailable: false,
       };
     },
@@ -788,7 +814,7 @@ test('a superseded catalog response cannot replace newer type-ahead results', as
   row.input.value = 'new';
   await runtime.api.searchFilamentsNow(row, 'new');
   assert.equal(row.suggestions[0].label, 'New result PETG');
-  resolveOld({ suggestions: [{ id: 'old', label: 'Old result PLA' }], stale: true });
+  resolveOld({ suggestions: [{ label: 'Old result PLA' }], stale: true });
   await first;
   assert.equal(row.suggestions[0].label, 'New result PETG');
 });
