@@ -636,6 +636,9 @@
   var TOOL_SETTINGS_URL = '/api/settings/tools';
   var FILAMENT_SEARCH_URL = '/api/filaments';
   var FILAMENT_SEARCH_DELAY_MS = 100;
+  var FILAMENT_LOADING_RETRY_MS = 500;
+  var FILAMENT_LOADING_RETRY_LIMIT = 30;
+  var TOOL_SETTINGS_SAVE_TIMEOUT_MS = 10000;
   var TOOL_COLOR_RE = /^#[0-9a-f]{6}$/i;
 
   function queryFlag(name) {
@@ -986,8 +989,14 @@
   }
 
   function automaticToolCount() {
-    if (toolEditorView && toolEditorView.detected.toolCount != null) return toolEditorView.detected.toolCount;
-    if (toolEditorView && toolEditorView.effective.toolCountSource !== 'override') return toolEditorView.effective.toolCount;
+    var adjustedFloor = toolEditorView && toolEditorView.effective.countAdjusted === true
+      ? toolEditorView.effective.toolCount : 0;
+    if (toolEditorView && toolEditorView.detected.toolCount != null) {
+      return Math.max(toolEditorView.detected.toolCount, adjustedFloor);
+    }
+    if (toolEditorView && (toolEditorView.effective.toolCountSource !== 'override' || adjustedFloor)) {
+      return toolEditorView.effective.toolCount;
+    }
     var highest = toolEditorDraft ? Object.keys(toolEditorDraft.toolSlots).reduce(function (max, key) {
       return Math.max(max, Number(key));
     }, 0) : 0;
@@ -1220,6 +1229,23 @@
       .then(function (response) { if (!response.ok) throw new Error('OpenPrintTag unavailable'); return response.json(); })
       .then(function (payload) {
         if (seq !== filamentSearchSeq || !toolEditorOpen || row.input.value.trim() !== query) return;
+        if (payload && payload.loading === true) {
+          if (row.loadingRetryCount < FILAMENT_LOADING_RETRY_LIMIT) {
+            row.loadingRetryCount++;
+            clearTimeout(filamentSearchTimer);
+            filamentSearchTimer = setTimeout(function () {
+              filamentSearchTimer = null;
+              if (seq !== filamentSearchSeq || !toolEditorOpen || row.input.value.trim() !== query) return;
+              searchFilamentsNow(row, query, true);
+            }, FILAMENT_LOADING_RETRY_MS);
+          } else {
+            var hasSuggestions = Array.isArray(payload.suggestions) && payload.suggestions.length > 0;
+            payload = Object.assign({}, payload, {
+              loading: false,
+              unavailable: hasSuggestions ? payload.unavailable : true,
+            });
+          }
+        }
         renderFilamentSuggestions(row, payload);
       })
       .catch(function (error) {
@@ -1234,8 +1260,9 @@
       });
   }
 
-  function searchFilamentsNow(row, query) {
+  function searchFilamentsNow(row, query, loadingRetry) {
     query = String(query == null ? row.input.value : query).trim();
+    if (!loadingRetry) row.loadingRetryCount = 0;
     clearTimeout(filamentSearchTimer);
     filamentSearchTimer = null;
     var seq = ++filamentSearchSeq;
@@ -1255,6 +1282,7 @@
     clearTimeout(filamentSearchTimer);
     filamentSearchTimer = null;
     var query = row.input.value.trim();
+    row.loadingRetryCount = 0;
     ++filamentSearchSeq;
     if (filamentSearchCtrl) filamentSearchCtrl.abort();
     filamentSearchCtrl = null;
@@ -1272,6 +1300,7 @@
   }
 
   function handleFilamentKeydown(row, event) {
+    if (event && (event.isComposing || event.keyCode === 229)) return;
     if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && row.suggestions.length) {
       event.preventDefault();
       var start = row.activeSuggestion < 0 ? (event.key === 'ArrowDown' ? 0 : row.suggestions.length - 1) :
@@ -1468,7 +1497,7 @@
       var row = {
         label: label, wrapper: wrapper, source: source, loaded: loaded, color: color,
         input: input, nameAuto: nameAuto, listbox: listbox, feedback: feedback,
-        suggestions: [], optionNodes: [], activeSuggestion: -1,
+        suggestions: [], optionNodes: [], activeSuggestion: -1, loadingRetryCount: 0,
       };
       bindToolEditorRow(row);
       toolEditorRowRefs.push(row);
@@ -1601,12 +1630,24 @@
     toolEditorSaving = true;
     setToolEditorStatus('Saving tool settings…', false);
     updateToolEditorSaveState();
-    return fetch(TOOL_SETTINGS_URL, {
+    var saveCtrl = new AbortController();
+    var saveTimeout;
+    var request = fetch(TOOL_SETTINGS_URL, {
       method: 'PUT',
       cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
+      signal: saveCtrl.signal,
       body: JSON.stringify(payload),
-    })
+    });
+    var timeout = new Promise(function (_resolve, reject) {
+      saveTimeout = setTimeout(function () {
+        var error = new Error('Tool settings save timed out. Your unsaved changes are still available.');
+        error.name = 'TimeoutError';
+        reject(error);
+        saveCtrl.abort();
+      }, TOOL_SETTINGS_SAVE_TIMEOUT_MS);
+    });
+    return Promise.race([request, timeout])
       .then(function (response) {
         return response.json().then(function (body) {
           if (!response.ok) throw new Error(body && body.error ? body.error : 'Tool settings could not be saved.');
@@ -1626,7 +1667,8 @@
         toolEditorSaving = false;
         setToolEditorStatus(error && error.message ? error.message : 'Tool settings could not be saved.', true);
         updateToolEditorSaveState();
-      });
+      })
+      .finally(function () { clearTimeout(saveTimeout); });
   }
 
   var cameraRetryTimer = null;

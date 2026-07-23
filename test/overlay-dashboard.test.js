@@ -14,6 +14,7 @@ const rawScript = html.slice(scriptStart, html.lastIndexOf('</script>'));
 function makeToolSettingsView({
   toolCount = null,
   toolSlots = {},
+  minimumToolCount = 0,
   detected = {
     source: 'connect',
     status: 'fresh',
@@ -26,7 +27,8 @@ function makeToolSettingsView({
 } = {}) {
   const normalizedDetected = JSON.parse(JSON.stringify(detected));
   const highestOverride = Object.keys(toolSlots).reduce((highest, key) => Math.max(highest, Number(key)), 0);
-  const effectiveCount = toolCount ?? normalizedDetected.toolCount ?? Math.max(1, highestOverride);
+  const baseCount = toolCount ?? normalizedDetected.toolCount ?? Math.max(1, highestOverride);
+  const effectiveCount = Math.max(baseCount, minimumToolCount);
   const detectedByLabel = new Map((normalizedDetected.toolSlots || []).map((slot) => [slot.toolLabel, slot]));
   const effectiveSlots = Array.from({ length: effectiveCount }, (_, toolIndex) => {
     const toolLabel = toolIndex + 1;
@@ -55,6 +57,7 @@ function makeToolSettingsView({
     effective: {
       toolCount: effectiveCount,
       toolCountSource: toolCount != null ? 'override' : normalizedDetected.toolCount != null ? 'connect' : 'fallback',
+      countAdjusted: effectiveCount > baseCount,
       toolSlots: effectiveSlots,
     },
   };
@@ -188,6 +191,7 @@ function createRuntime({
   settingsFailure = false,
   filamentPayload = { suggestions: [], stale: false, unavailable: false },
   saveFailure = false,
+  savePromise,
   saveResponse,
 } = {}) {
   const imageRequests = [];
@@ -263,6 +267,7 @@ function createRuntime({
       }
       if (url === '/api/settings/tools' && options.method === 'PUT') {
         const payload = JSON.parse(options.body);
+        if (savePromise) return savePromise;
         if (saveFailure) return Promise.resolve({ ok: false, json: () => Promise.resolve({ error: 'save failed' }) });
         const body = typeof saveResponse === 'function' ? saveResponse(payload) :
           saveResponse || makeToolSettingsView({
@@ -304,6 +309,8 @@ function createRuntime({
     globalThis.__overlay = {
       S: S,
       el: el,
+      FILAMENT_LOADING_RETRY_MS: FILAMENT_LOADING_RETRY_MS,
+      TOOL_SETTINGS_SAVE_TIMEOUT_MS: TOOL_SETTINGS_SAVE_TIMEOUT_MS,
       applyCameraStatus: applyCameraStatus,
       applyToolSettingsToState: applyToolSettingsToState,
       closeToolEditor: closeToolEditor,
@@ -581,6 +588,42 @@ test('Auto and Override count modes preserve hidden slot overrides', async () =>
   });
 });
 
+test('Auto count preview keeps the active-tool floor from an adjusted manual count', async () => {
+  const detected = { source: null, status: 'unavailable', toolCount: null, toolSlots: [] };
+  const runtime = createRuntime({
+    height: 420,
+    toolSettings: makeToolSettingsView({
+      toolCount: 2,
+      minimumToolCount: 5,
+      detected,
+    }),
+    saveResponse(payload) {
+      return makeToolSettingsView({
+        toolCount: payload.toolCount,
+        toolSlots: payload.toolSlots,
+        minimumToolCount: 5,
+        detected,
+      });
+    },
+  });
+  runtime.api.openToolEditor();
+  await flushPromises();
+  assert.equal(runtime.api.getToolEditorRows().length, 2);
+  assert.match(runtime.elements.get('tool-count-source').textContent, /active tool extends display to 5/);
+
+  const mode = runtime.elements.get('tool-count-mode');
+  mode.value = 'auto';
+  mode.dispatch('change');
+
+  assert.equal(runtime.elements.get('tool-count-input').value, '5');
+  assert.equal(runtime.api.getToolEditorRows().length, 5);
+  assert.equal(runtime.elements.get('tool-count-source').textContent, '5 fallback · Connect unavailable');
+  await runtime.api.saveToolSettings();
+  const saveCall = runtime.fetchCalls.find((call) => call.url === '/api/settings/tools' && call.options.method === 'PUT');
+  assert.equal(JSON.parse(saveCall.options.body).toolCount, null);
+  assert.equal(runtime.elements.get('tool-settings-summary').textContent, '5 tools · 0 loaded · Auto · fallback');
+});
+
 test('ARIA picker creates name and color overrides without changing automatic presence', async () => {
   const runtime = createRuntime({
     height: 420,
@@ -618,6 +661,35 @@ test('ARIA picker creates name and color overrides without changing automatic pr
     toolCount: null,
     toolSlots: { 1: { name: '<img src=x> Shimmer PETG', color: '#452060' } },
   });
+});
+
+test('filament picker leaves IME composition keys to the browser', async () => {
+  const runtime = createRuntime({
+    height: 420,
+    toolSettings: makeToolSettingsView({
+      detected: { source: 'connect', status: 'fresh', toolCount: 1, toolSlots: [] },
+    }),
+  });
+  runtime.api.openToolEditor();
+  await flushPromises();
+  const row = runtime.api.getToolEditorRows()[0];
+  row.input.value = 'composing text';
+  runtime.api.renderFilamentSuggestions(row, {
+    suggestions: [{ label: 'Prusament PLA', color: '#F06A00' }],
+    stale: false,
+    unavailable: false,
+  });
+
+  const arrow = row.input.dispatch('keydown', { key: 'ArrowDown', isComposing: true });
+  const enter = row.input.dispatch('keydown', { key: 'Enter', isComposing: true });
+  assert.equal(arrow.defaultPrevented, undefined);
+  assert.equal(enter.defaultPrevented, undefined);
+  assert.equal(row.activeSuggestion, -1);
+  assert.equal(row.input.value, 'composing text');
+  assert.equal(row.listbox.hidden, false);
+
+  row.input.dispatch('keydown', { key: 'ArrowDown', isComposing: false });
+  assert.equal(row.activeSuggestion, 0);
 });
 
 test('Auto type preserves the independently selected OpenPrintTag color override', async () => {
@@ -764,6 +836,45 @@ test('OpenPrintTag loading remains honest while manual values stay usable', asyn
   assert.equal(row.listbox.hidden, false);
 });
 
+test('OpenPrintTag loading responses retry the current query until suggestions are ready', async () => {
+  let requestCount = 0;
+  const runtime = createRuntime({
+    height: 420,
+    toolSettings: makeToolSettingsView({
+      detected: { source: 'connect', status: 'fresh', toolCount: 1, toolSlots: [] },
+    }),
+    filamentPayload() {
+      requestCount++;
+      return requestCount === 1
+        ? { suggestions: [], stale: false, unavailable: false, loading: true }
+        : {
+          suggestions: [{ label: 'Prusament PETG — Signal White', color: '#EEEEEE' }],
+          stale: false,
+          unavailable: false,
+          loading: false,
+        };
+    },
+  });
+  runtime.api.openToolEditor();
+  await flushPromises();
+  const row = runtime.api.getToolEditorRows()[0];
+  row.input.value = 'petg';
+
+  await runtime.api.searchFilamentsNow(row, 'petg');
+  assert.equal(requestCount, 1);
+  assert.match(row.feedback.textContent, /suggestions are loading/);
+  assert.equal([...runtime.timers.values()].filter(
+    (timer) => timer.delay === runtime.api.FILAMENT_LOADING_RETRY_MS,
+  ).length, 1);
+
+  runtime.runTimers(runtime.api.FILAMENT_LOADING_RETRY_MS);
+  await flushPromises();
+  assert.equal(requestCount, 2);
+  assert.equal(row.suggestions[0].label, 'Prusament PETG — Signal White');
+  assert.equal(row.listbox.hidden, false);
+  assert.match(row.feedback.textContent, /1 OpenPrintTag suggestion/);
+});
+
 test('OpenPrintTag type-ahead searches the latest value after a 100 ms debounce', async () => {
   const runtime = createRuntime({
     height: 420,
@@ -870,6 +981,34 @@ test('invalid custom counts and failed saves keep the independent draft open', a
   assert.match(runtime.elements.get('tool-editor-status').textContent, /save failed/);
   assert.equal(runtime.elements.get('tools-editor').hidden, false);
   assert.equal(runtime.api.getToolEditorRows()[0].input.value, 'Unsaved custom PLA');
+});
+
+test('a stalled settings save times out and keeps the draft editable', async () => {
+  const runtime = createRuntime({
+    height: 420,
+    toolSettings: makeToolSettingsView({ toolCount: 1 }),
+    savePromise: new Promise(() => {}),
+  });
+  runtime.api.openToolEditor();
+  await flushPromises();
+  const row = runtime.api.getToolEditorRows()[0];
+  row.input.value = 'Draft survives timeout';
+  row.input.dispatch('input');
+
+  const saving = runtime.api.saveToolSettings();
+  const saveCall = runtime.fetchCalls.find((call) => call.url === '/api/settings/tools' && call.options.method === 'PUT');
+  assert.equal(row.input.disabled, true);
+  assert.equal(saveCall.options.signal.aborted, false);
+
+  runtime.runTimers(runtime.api.TOOL_SETTINGS_SAVE_TIMEOUT_MS);
+  await saving;
+  assert.equal(saveCall.options.signal.aborted, true);
+  assert.match(runtime.elements.get('tool-editor-status').textContent, /timed out/);
+  assert.equal(runtime.elements.get('tools-editor').hidden, false);
+  assert.equal(row.input.value, 'Draft survives timeout');
+  assert.equal(row.input.disabled, false);
+  assert.equal(runtime.elements.get('tool-editor-save').disabled, false);
+  assert.equal(runtime.elements.get('tool-editor-cancel').disabled, false);
 });
 
 test('overlay has no stream-control, operator-message, or away-mode remnants', () => {

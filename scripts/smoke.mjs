@@ -109,10 +109,9 @@ try {
   if (typeof state.updatedAt !== 'number' || typeof state.online !== 'boolean') {
     throw new Error('state endpoint returned an unexpected payload');
   }
-  if (state.toolCount !== 3 || state.toolCountSource !== 'connect' || state.toolSlots?.length !== 3 ||
-      state.toolSlots[0].loaded !== true || state.toolSlots[0].material !== 'PLA' ||
-      state.toolSlots[1].loaded !== false || state.toolSlots[2].loaded !== null ||
-      state.toolSettings?.toolCount !== null || state.toolSettings?.detected?.status !== 'stale' ||
+  if (state.toolCount !== 1 || state.toolCountSource !== 'fallback' || state.toolSlots?.length !== 1 ||
+      state.toolSlots[0].loaded !== null || state.toolSlots[0].material !== null ||
+      state.toolSettings?.toolCount !== null || state.toolSettings?.detected?.status !== 'unavailable' ||
       state.camera?.enabled !== false) {
     throw new Error('state endpoint returned unexpected tool or camera status');
   }
@@ -120,8 +119,8 @@ try {
   const initialToolsResponse = await fetch(`${baseUrl}/api/settings/tools`);
   const initialToolsText = await initialToolsResponse.text();
   const initialTools = JSON.parse(initialToolsText);
-  if (!initialToolsResponse.ok || initialTools.toolCount !== null || initialTools.effective?.toolCount !== 3 ||
-      initialTools.effective?.toolCountSource !== 'connect' || initialTools.detected?.status !== 'stale' ||
+  if (!initialToolsResponse.ok || initialTools.toolCount !== null || initialTools.effective?.toolCount !== 1 ||
+      initialTools.effective?.toolCountSource !== 'fallback' || initialTools.detected?.status !== 'unavailable' ||
       /password|refreshToken|cameraRtspUrl|configPath/i.test(initialToolsText)) {
     throw new Error('tool settings endpoint exposed an unexpected payload');
   }
@@ -202,9 +201,9 @@ try {
     body: JSON.stringify({ toolCount: null, toolSlots: { 2: { name: 'Reserve spool' } } }),
   });
   const autoTools = await autoResponse.json();
-  if (!autoResponse.ok || autoTools.toolCount !== null || autoTools.effective?.toolCount !== 3 ||
-      autoTools.effective?.toolCountSource !== 'connect' ||
-      autoTools.effective?.toolSlots?.[1]?.loaded !== false ||
+  if (!autoResponse.ok || autoTools.toolCount !== null || autoTools.effective?.toolCount !== 2 ||
+      autoTools.effective?.toolCountSource !== 'fallback' ||
+      autoTools.effective?.toolSlots?.[1]?.loaded !== null ||
       autoTools.effective?.toolSlots?.[1]?.name !== 'Reserve spool') {
     throw new Error('automatic count and independent slot overrides did not resolve correctly');
   }
@@ -213,7 +212,7 @@ try {
   startChild();
   await waitForHealth(baseUrl);
   const restartedAutoTools = await (await fetch(`${baseUrl}/api/settings/tools`)).json();
-  if (restartedAutoTools.toolCount !== null || restartedAutoTools.effective?.toolCount !== 3 ||
+  if (restartedAutoTools.toolCount !== null || restartedAutoTools.effective?.toolCount !== 2 ||
       restartedAutoTools.toolSlots?.['2']?.name !== 'Reserve spool') {
     throw new Error('automatic settings did not survive a server restart');
   }

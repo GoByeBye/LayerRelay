@@ -34,6 +34,18 @@ function truncateUtf16(value, maximum) {
   return truncated;
 }
 
+function boundedLabel(value, maximum = MAX_LABEL_LENGTH) {
+  if (value.length <= maximum) return value;
+  const marker = '…';
+  const available = Math.max(0, maximum - marker.length);
+  const prefixUnits = Math.ceil(available * 2 / 3);
+  const suffixUnits = available - prefixUnits;
+  const prefix = truncateUtf16(value, prefixUnits).trimEnd();
+  let suffix = value.slice(Math.max(0, value.length - suffixUnits));
+  if (/^[\uDC00-\uDFFF]/.test(suffix)) suffix = suffix.slice(1);
+  return `${prefix}${marker}${suffix.trimStart()}`;
+}
+
 function cleanText(value) {
   if (typeof value !== 'string' || value.length > 4096) return null;
   let normalized;
@@ -51,6 +63,12 @@ function boundedText(value, maximum = MAX_TEXT_LENGTH) {
   const cleaned = cleanText(value);
   if (!cleaned) return null;
   return truncateCodePoints(cleaned, maximum).trim() || null;
+}
+
+function boundedProductName(value) {
+  const cleaned = cleanText(value);
+  if (!cleaned) return null;
+  return boundedLabel(cleaned, MAX_TEXT_LENGTH).trim() || null;
 }
 
 function normalizeQuery(value) {
@@ -113,7 +131,7 @@ function normalizeSourceMaterial(value, brandNames) {
   // Type is deliberately not inferred from names or abbreviations. Only the
   // official FFF type can become a tool configuration suggestion.
   const type = boundedText(value.type, MAX_TYPE_LENGTH);
-  const name = boundedText(value.name);
+  const name = boundedProductName(value.name);
   if (!brandSlug || !slug || !brand || !type || !name) return null;
   return {
     brandSlug,
@@ -131,7 +149,7 @@ function normalizeCachedMaterial(value) {
   const slug = safeSlug(value.slug);
   const brand = boundedText(value.brand);
   const type = boundedText(value.type, MAX_TYPE_LENGTH);
-  const name = boundedText(value.name);
+  const name = boundedProductName(value.name);
   const color = value.color == null ? null : normalizeHexColor(value.color);
   if (!brandSlug || !slug || !brand || !type || !name || (value.color != null && !color)) {
     return null;
@@ -141,7 +159,7 @@ function normalizeCachedMaterial(value) {
 
 function publicSuggestion(material) {
   return {
-    label: truncateUtf16(`${material.brand} — ${material.name}`, MAX_LABEL_LENGTH).trim(),
+    label: boundedLabel(`${material.brand} — ${material.name}`).trim(),
     color: material.color,
   };
 }

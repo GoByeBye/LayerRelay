@@ -35,6 +35,7 @@ const { pruneAnalysisCache } = require('./cache-retention.js');
 const { preferredPrintName } = require('./print-name.js');
 const { sampleHealth, selectTelemetrySource } = require('./telemetry-freshness.js');
 const { createHttpsRequest } = require('./https-request.js');
+const { createHttpErrorHandler } = require('./http-error-handler.js');
 const {
   createToolSettingsStore,
   mergeConnectToolInventory,
@@ -99,7 +100,7 @@ const connectPrinterIdentity = typeof cfg.connectPrinterUuid === 'string' && cfg
 let connectLive = null;       // last mapped Connect telemetry (see mapConnectToState)
 const restoredConnectToolInventory = readJsonValidatedWithBackup(
   CONNECT_TOOL_INVENTORY_FILE,
-  (saved) => restoreCachedConnectToolInventory(saved, connectPrinterIdentity),
+  (saved) => restoreCachedConnectToolInventory(saved, connectPrinterIdentity, connectEnabled),
   null,
 );
 let connectToolInventory = restoredConnectToolInventory; // failed polls retain this last-known inventory
@@ -1153,17 +1154,7 @@ app.get('/overlay', (_req, res) => {
 app.get('/', (_req, res) => { noStore(res); res.sendFile(path.join(__dirname, 'public', 'overlay.html')); });
 
 // Keep all API failures JSON-only; never expose Express's HTML stack/path response.
-app.use((err, _req, res, next) => {
-  if (res.headersSent) return next(err);
-  if (err && err.type === 'entity.too.large') {
-    return res.status(413).json({ error: 'request body too large' });
-  }
-  if (err instanceof SyntaxError && err && Object.hasOwn(err, 'body')) {
-    return res.status(400).json({ error: 'invalid JSON body' });
-  }
-  console.error(`[http] ${err && err.message ? err.message : 'unknown error'}`);
-  return res.status(500).json({ error: 'internal server error' });
-});
+app.use(createHttpErrorHandler(console));
 
 // Self-scheduling poll loop: never overlaps requests (important when the printer
 // API hangs), and backs off while it's failing so we don't pile onto a struggling board.

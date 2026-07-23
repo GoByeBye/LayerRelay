@@ -174,6 +174,7 @@ test('cached Connect inventory is scoped to its printer', () => {
     toolCount: 8,
     toolSlots: eightTools.toolSlots,
   }, 'printer-a'), null);
+  assert.equal(restoreCachedConnectToolInventory(eightTools, 'printer-a', false), null);
   assert.equal(restoreCachedConnectToolInventory(eightTools, 'printer-a').toolCount, 8);
 
   const offlineFixture = restoreCachedConnectToolInventory({
@@ -254,6 +255,30 @@ test('preserves compatibility with accepted configuration null placeholders', ()
   }), /unknown setting/);
 });
 
+test('configuration defaults keep loaded, name, and color independent', () => {
+  const dataFile = path.join(tempDir(), 'tool-settings.json');
+  const store = createToolSettingsStore({
+    dataFile,
+    defaults: {
+      toolCount: 3,
+      toolSlots: {
+        1: { name: 'Remembered PLA' },
+        2: { color: '#aabbcc' },
+        3: { loaded: false, name: 'Empty PETG' },
+      },
+    },
+  });
+
+  assert.deepEqual(store.get(), {
+    toolCount: 3,
+    toolSlots: {
+      1: { name: 'Remembered PLA' },
+      2: { color: '#AABBCC' },
+      3: { loaded: false, name: 'Empty PETG' },
+    },
+  });
+});
+
 test('loads a valid primary persisted snapshot', () => {
   const dataFile = path.join(tempDir(), 'tool-settings.json');
   fs.writeFileSync(dataFile, persisted({
@@ -266,6 +291,34 @@ test('loads a valid primary persisted snapshot', () => {
   assert.deepEqual(store.get(), {
     toolCount: 1,
     toolSlots: { 1: { loaded: true, name: 'Primary PETG', color: '#AABBCC' }, 8: { loaded: false } },
+  });
+});
+
+test('migrates loaded presence only for persisted version 1 snapshots', () => {
+  const legacyFile = path.join(tempDir(), 'legacy-tool-settings.json');
+  fs.writeFileSync(legacyFile, persisted({
+    toolCount: 2,
+    toolSlots: { 1: { name: 'Legacy PLA' }, 2: { color: '#112233' } },
+  }, 1));
+  const currentFile = path.join(tempDir(), 'current-tool-settings.json');
+  fs.writeFileSync(currentFile, persisted({
+    toolCount: 2,
+    toolSlots: { 1: { name: 'Current PLA' }, 2: { color: '#445566' } },
+  }, 2));
+
+  assert.deepEqual(createToolSettingsStore({ dataFile: legacyFile, defaults }).get(), {
+    toolCount: 2,
+    toolSlots: {
+      1: { loaded: true, name: 'Legacy PLA' },
+      2: { loaded: true, color: '#112233' },
+    },
+  });
+  assert.deepEqual(createToolSettingsStore({ dataFile: currentFile, defaults }).get(), {
+    toolCount: 2,
+    toolSlots: {
+      1: { name: 'Current PLA' },
+      2: { color: '#445566' },
+    },
   });
 });
 

@@ -137,7 +137,7 @@ function normalizeConfigurationDefaults(input) {
       if (value[key] != null) toolSlots[slot][key] = value[key];
     }
   }
-  return migrateLegacyLoadedSemantics(normalizeToolSettings({ toolCount: input.toolCount, toolSlots }));
+  return normalizeToolSettings({ toolCount: input.toolCount, toolSlots });
 }
 
 function cloneToolSettings(settings) {
@@ -210,7 +210,8 @@ function normalizeDetectedToolSettings(input) {
   return { source, status, toolCount, toolSlots };
 }
 
-function restoreCachedConnectToolInventory(saved, printerUuid) {
+function restoreCachedConnectToolInventory(saved, printerUuid, connectEnabled = true) {
+  if (!connectEnabled) return null;
   if (!plainObject(saved) || (saved.version !== 1 && saved.version !== 2)) return null;
   const configuredPrinter = cleanDetectedText(printerUuid, 256);
   const cachedPrinter = cleanDetectedText(saved.printerUuid, 256);

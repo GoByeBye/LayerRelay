@@ -73,6 +73,20 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+function hasUnpairedSurrogate(value) {
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xD800 && code <= 0xDBFF) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xDC00 && next <= 0xDFFF)) return true;
+      index += 1;
+    } else if (code >= 0xDC00 && code <= 0xDFFF) {
+      return true;
+    }
+  }
+  return false;
+}
+
 test('rejects short or oversized queries without starting network work', () => {
   let calls = 0;
   const index = createOpenPrintTagIndex(indexOptions(async () => {
@@ -193,6 +207,61 @@ test('requires every normalized token and returns at most twelve stable matches'
     [...result.suggestions.map((item) => item.label)].sort((a, b) => a.localeCompare(b)),
   );
   assert.deepEqual(index.search('orange nylon').suggestions, []);
+});
+
+test('bounded labels retain distinguishing suffixes for long shared product names', async () => {
+  const variants = [
+    ['black', 'Black', '#545252ff'],
+    ['blue', 'Blue', '#0099e6ff'],
+    ['gray', 'Gray', '#808080ff'],
+    ['red', 'Red', '#e72f1dff'],
+    ['transparent', 'Transparent', '#f2ece9ff'],
+  ];
+  const materials = variants.map(([slug, suffix, color]) => sourceMaterial({
+    slug: `rosa3d-filaments-rosa-tpu-hardtech-${slug}`,
+    brand: { slug: 'rosa3d-filaments' },
+    brandId: 'rosa3d-filaments',
+    name: `ROSA TPU HardTech+ 83D, Impact - Abrasive - UV - H2O - microbe- resistant ${suffix}`,
+    type: 'TPU',
+    primary_color: { color_rgba: color },
+  }));
+  const index = createOpenPrintTagIndex(indexOptions(datasetRequest(
+    materials,
+    [sourceBrand({ slug: 'rosa3d-filaments', name: 'ROSA3D Filaments' })],
+  )));
+
+  await index.refresh();
+  const suggestions = index.search('rosa hardtech').suggestions;
+
+  assert.equal(suggestions.length, variants.length);
+  assert.equal(new Set(suggestions.map((item) => item.label)).size, variants.length);
+  assert.deepEqual(
+    suggestions.map((item) => item.label),
+    [...suggestions.map((item) => item.label)].sort((left, right) => left.localeCompare(right)),
+  );
+  assert.ok(suggestions.every((item) =>
+    item.label.length <= 80 &&
+    item.label.startsWith('ROSA3D Filaments — ') &&
+    item.label.includes('…')));
+  for (const [, suffix, color] of variants) {
+    const suggestion = suggestions.find((item) => item.label.endsWith(suffix));
+    assert.ok(suggestion, `expected a distinct ${suffix} suggestion`);
+    assert.equal(suggestion.color, color.slice(0, 7).toUpperCase());
+  }
+});
+
+test('bounded labels never split UTF-16 surrogate pairs at either retained edge', async () => {
+  const name = `${'A'.repeat(45)}😀 middle ${'B'.repeat(40)}😀${'Z'.repeat(25)}`;
+  const index = createOpenPrintTagIndex(indexOptions(datasetRequest(
+    [sourceMaterial({ name })],
+    [sourceBrand()],
+  )));
+
+  await index.refresh();
+  const [suggestion] = index.search('acme').suggestions;
+
+  assert.ok(suggestion.label.length <= 80);
+  assert.equal(hasUnpairedSurrogate(suggestion.label), false);
 });
 
 test('persists only canonical OpenPrintTag fields and restores a valid backup locally', async () => {
