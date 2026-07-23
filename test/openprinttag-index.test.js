@@ -40,6 +40,16 @@ function sourceMaterial(overrides = {}) {
   };
 }
 
+function sourceMaterials(count, prefix) {
+  return Array.from({ length: count }, (_, index) => {
+    const suffix = String(index).padStart(3, '0');
+    return sourceMaterial({
+      slug: `acme-${prefix}-${suffix}`,
+      name: `PLA ${prefix} ${suffix}`,
+    });
+  });
+}
+
 function jsonResponse(value, status = 200) {
   return { status, body: JSON.stringify(value) };
 }
@@ -207,6 +217,58 @@ test('requires every normalized token and returns at most twelve stable matches'
     [...result.suggestions.map((item) => item.label)].sort((a, b) => a.localeCompare(b)),
   );
   assert.deepEqual(index.search('orange nylon').suggestions, []);
+});
+
+test('ranks exact single- and multi-token material types before capped substring matches', async () => {
+  const substringMatches = Array.from({ length: 13 }, (_, index) => sourceMaterial({
+    slug: `acme-pctg-blend-${String(index).padStart(2, '0')}`,
+    name: `A Blend PCTG ${String(index).padStart(2, '0')}`,
+    type: 'PCTG',
+  }));
+  const partialTypeMatches = Array.from({ length: 13 }, (_, index) => sourceMaterial({
+    slug: `acme-pc-name-blend-${String(index).padStart(2, '0')}`,
+    name: `B PC Product Blend ${String(index).padStart(2, '0')}`,
+    type: 'PC',
+  }));
+  const exactPc = sourceMaterial({
+    slug: 'acme-pc-alpha',
+    name: 'A Polycarbonate',
+    type: 'PC',
+  });
+  const exactMultiToken = sourceMaterial({
+    slug: 'acme-pc-blend-zulu',
+    name: 'Zulu Polycarbonate Blend',
+    type: 'PC Blend',
+  });
+  const index = createOpenPrintTagIndex(indexOptions(datasetRequest(
+    [...substringMatches, ...partialTypeMatches, exactPc, exactMultiToken],
+    [sourceBrand()],
+  )));
+
+  await index.refresh();
+
+  const pcSuggestions = index.search('pc').suggestions;
+  assert.equal(pcSuggestions.length, 12);
+  assert.deepEqual(pcSuggestions[0], {
+    label: 'Acme — A Polycarbonate',
+    color: '#112233',
+  });
+  assert.deepEqual(
+    pcSuggestions.slice(1).map((item) => item.label),
+    partialTypeMatches.slice(0, 11).map((item) => `Acme — ${item.name}`),
+  );
+
+  const multiTokenSuggestions = index.search('pc-blend').suggestions;
+  assert.equal(multiTokenSuggestions.length, 12);
+  assert.deepEqual(multiTokenSuggestions[0], {
+    label: 'Acme — Zulu Polycarbonate Blend',
+    color: '#112233',
+  });
+  assert.deepEqual(
+    multiTokenSuggestions.slice(1).map((item) => item.label),
+    partialTypeMatches.slice(0, 11).map((item) => `Acme — ${item.name}`),
+  );
+  assert.deepEqual(index.search('pc missing').suggestions, []);
 });
 
 test('bounded labels retain distinguishing suffixes for long shared product names', async () => {
@@ -430,6 +492,92 @@ test('preserves last-good data and observes retry cooldown after refresh failure
   assert.equal(fs.readFileSync(dataFile, 'utf8'), lastGood);
   assert.deepEqual(warnings, ['openprinttag_refresh_failed']);
   assert.equal(JSON.stringify(warnings).includes('private'), false);
+});
+
+test('accepts the absolute minimum dataset on a cold start', async () => {
+  const dataFile = tempDataFile();
+  const index = createOpenPrintTagIndex({
+    request: datasetRequest(sourceMaterials(100, 'cold'), [sourceBrand()]),
+    dataFile,
+    logger: SILENT_LOGGER,
+    minDatasetEntries: 100,
+  });
+
+  assert.equal(await index.refresh(), true);
+  assert.deepEqual(index.search('cold 099').suggestions, [
+    { label: 'Acme — PLA cold 099', color: '#112233' },
+  ]);
+});
+
+test('allows a refresh that retains exactly half of the last-good dataset', async () => {
+  const dataFile = tempDataFile();
+  let now = 100;
+  const initial = createOpenPrintTagIndex({
+    request: datasetRequest(sourceMaterials(200, 'boundary'), [sourceBrand()]),
+    dataFile,
+    logger: SILENT_LOGGER,
+    minDatasetEntries: 100,
+    cacheTtlMs: 100,
+    now: () => now,
+  });
+  assert.equal(await initial.refresh(), true);
+
+  now = 1000;
+  const reduced = createOpenPrintTagIndex({
+    request: datasetRequest(sourceMaterials(100, 'boundary'), [sourceBrand()]),
+    dataFile,
+    logger: SILENT_LOGGER,
+    minDatasetEntries: 100,
+    cacheTtlMs: 100,
+    now: () => now,
+  });
+
+  assert.equal(await reduced.refresh(), true);
+  assert.deepEqual(reduced.search('boundary 099').suggestions, [
+    { label: 'Acme — PLA boundary 099', color: '#112233' },
+  ]);
+  assert.deepEqual(reduced.search('boundary 199').suggestions, []);
+});
+
+test('rejects an implausible refresh shrink and preserves the last-good cache', async () => {
+  const dataFile = tempDataFile();
+  let now = 100;
+  const initial = createOpenPrintTagIndex({
+    request: datasetRequest(sourceMaterials(300, 'complete'), [sourceBrand()]),
+    dataFile,
+    logger: SILENT_LOGGER,
+    minDatasetEntries: 100,
+    cacheTtlMs: 100,
+    now: () => now,
+  });
+  assert.equal(await initial.refresh(), true);
+  const lastGood = fs.readFileSync(dataFile, 'utf8');
+  const lastGoodBackup = fs.readFileSync(`${dataFile}.bak`, 'utf8');
+
+  now = 1000;
+  const calls = [];
+  const warnings = [];
+  const partial = createOpenPrintTagIndex({
+    request: datasetRequest(sourceMaterials(100, 'complete'), [sourceBrand()], calls),
+    dataFile,
+    logger: { warn(code) { warnings.push(code); } },
+    minDatasetEntries: 100,
+    cacheTtlMs: 100,
+    retryCooldownMs: 500,
+    now: () => now,
+  });
+
+  assert.equal(await partial.refresh(), false);
+  assert.equal(calls.length, 2);
+  assert.equal(fs.readFileSync(dataFile, 'utf8'), lastGood);
+  assert.equal(fs.readFileSync(`${dataFile}.bak`, 'utf8'), lastGoodBackup);
+  assert.deepEqual(partial.search('complete 299'), {
+    suggestions: [{ label: 'Acme — PLA complete 299', color: '#112233' }],
+    stale: true,
+    unavailable: true,
+    loading: false,
+  });
+  assert.deepEqual(warnings, ['openprinttag_refresh_failed']);
 });
 
 test('rejects malformed, undersized, and excessive generated datasets', async () => {

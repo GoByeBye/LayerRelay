@@ -815,6 +815,7 @@
   var toolEditorOpen = false;
   var toolEditorDirty = false;
   var toolEditorSaving = false;
+  var toolEditorSettingsReady = false;
   var toolEditorDraft = null;
   var toolEditorView = null;
   var toolEditorRowRefs = [];
@@ -840,6 +841,24 @@
     if (typeof value.name === 'string' && value.name) out.name = cleanEditorName(value.name);
     if (typeof value.color === 'string' && TOOL_COLOR_RE.test(value.color)) out.color = value.color.toUpperCase();
     return out;
+  }
+
+  function validToolSettingsResponse(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    if (value.toolCount !== null &&
+        (!Number.isInteger(value.toolCount) || value.toolCount < 1 || value.toolCount > 32)) return false;
+    if (!value.toolSlots || typeof value.toolSlots !== 'object' || Array.isArray(value.toolSlots)) return false;
+    return Object.keys(value.toolSlots).every(function (key) {
+      if (!/^(?:[1-9]|[12][0-9]|3[0-2])$/.test(key)) return false;
+      var slot = value.toolSlots[key];
+      if (!slot || typeof slot !== 'object' || Array.isArray(slot)) return false;
+      return Object.keys(slot).every(function (field) {
+        if (field === 'loaded') return typeof slot.loaded === 'boolean';
+        if (field === 'name') return typeof slot.name === 'string' && slot.name.length <= 80;
+        if (field === 'color') return typeof slot.color === 'string' && TOOL_COLOR_RE.test(slot.color);
+        return false;
+      });
+    });
   }
 
   function normalizeToolSettings(value) {
@@ -1057,26 +1076,32 @@
     el.toolEditorStatus.classList.toggle('error', !!isError);
   }
 
+  function toolEditorLocked() {
+    return toolEditorSaving || !toolEditorSettingsReady;
+  }
+
   function updateToolEditorSaveState() {
     var count = Number(el.toolCountInput.value);
     var countIsValid = toolEditorDraft && (toolEditorDraft.toolCount === null ||
       (isFinite(count) && Math.floor(count) === count && count >= 1 && count <= 32));
-    el.toolEditorSave.disabled = toolEditorSaving || !toolEditorDirty || !countIsValid;
+    var locked = toolEditorLocked();
+    el.toolEditorSave.disabled = locked || !toolEditorDirty || !countIsValid;
     el.toolEditorCancel.disabled = toolEditorSaving;
-    el.toolCountMode.disabled = toolEditorSaving;
-    el.toolCountInput.disabled = toolEditorSaving || !toolEditorDraft || toolEditorDraft.toolCount === null;
+    el.toolCountMode.disabled = locked;
+    el.toolCountInput.disabled = locked || !toolEditorDraft || toolEditorDraft.toolCount === null;
     for (var i = 0; i < toolEditorRowRefs.length; i++) {
       var row = toolEditorRowRefs[i];
-      row.loaded.disabled = toolEditorSaving;
-      row.color.disabled = toolEditorSaving;
+      row.loaded.disabled = locked;
+      row.color.disabled = locked;
       var draftSlot = toolEditorDraft && toolEditorDraft.toolSlots[String(row.label)];
-      row.nameAuto.disabled = toolEditorSaving || !(draftSlot && own(draftSlot, 'name'));
-      row.input.disabled = toolEditorSaving;
+      row.nameAuto.disabled = locked || !(draftSlot && own(draftSlot, 'name'));
+      row.input.disabled = locked;
       updateToolRowSource(row);
     }
   }
 
   function markToolEditorDirty() {
+    if (!toolEditorSettingsReady) return;
     toolEditorDirty = !!toolEditorDraft && toolEditorDraftKey(toolEditorDraft) !== toolEditorBaselineKey;
     var count = Number(el.toolCountInput.value);
     var countIsValid = toolEditorDraft && (toolEditorDraft.toolCount === null ||
@@ -1155,7 +1180,7 @@
 
   function selectFilamentSuggestion(row, suggestion) {
     suggestion = normalizeFilamentSuggestion(suggestion);
-    if (!row || !suggestion || !toolEditorDraft || toolEditorSaving) return;
+    if (!row || !suggestion || !toolEditorDraft || toolEditorLocked()) return;
     var current = toolEditorDraft.toolSlots[String(row.label)] || {};
     var changed = !own(current, 'name') || current.name !== suggestion.label ||
       !!(suggestion.color && (!own(current, 'color') || current.color !== suggestion.color));
@@ -1339,7 +1364,7 @@
     setText(row.source, count ? count + ' override' + (count === 1 ? '' : 's') + ' · ' + connectStatusText(toolEditorView) :
       'Auto · ' + connectStatusText(toolEditorView));
     row.loaded.value = own(slot, 'loaded') ? (slot.loaded ? 'loaded' : 'empty') : 'auto';
-    row.nameAuto.disabled = toolEditorSaving || !own(slot, 'name');
+    row.nameAuto.disabled = toolEditorLocked() || !own(slot, 'name');
   }
 
   function syncToolCountEditor() {
@@ -1365,7 +1390,7 @@
 
   function bindToolEditorRow(row) {
     row.loaded.addEventListener('change', function () {
-      if (toolEditorSaving) return;
+      if (toolEditorLocked()) return;
       var current = toolEditorDraft.toolSlots[String(row.label)] || {};
       var changed = row.loaded.value === 'auto' ? own(current, 'loaded') :
         !own(current, 'loaded') || current.loaded !== (row.loaded.value === 'loaded');
@@ -1377,7 +1402,7 @@
       markToolEditorDirty();
     });
     row.color.addEventListener('input', function () {
-      if (toolEditorSaving) return;
+      if (toolEditorLocked()) return;
       var nextColor = row.color.value.toUpperCase();
       var current = toolEditorDraft.toolSlots[String(row.label)] || {};
       if (own(current, 'color') && current.color === nextColor) return;
@@ -1385,7 +1410,7 @@
       markToolEditorDirty();
     });
     row.nameAuto.addEventListener('click', function () {
-      if (toolEditorSaving) return;
+      if (toolEditorLocked()) return;
       var current = toolEditorDraft.toolSlots[String(row.label)] || {};
       if (!own(current, 'name')) return;
       cancelFilamentSearch();
@@ -1398,7 +1423,7 @@
       markToolEditorDirty();
     });
     row.input.addEventListener('input', function () {
-      if (toolEditorSaving) return;
+      if (toolEditorLocked()) return;
       var current = toolEditorDraft.toolSlots[String(row.label)] || {};
       var hasName = !!row.input.value.trim();
       var changed = hasName ? !own(current, 'name') || current.name !== row.input.value : own(current, 'name');
@@ -1540,6 +1565,7 @@
     toolEditorOpen = true;
     toolEditorDirty = false;
     toolEditorSaving = false;
+    toolEditorSettingsReady = false;
     toolEditorView = toolSettingsViewFromState(S.data || {});
     toolEditorDraft = cloneToolOverrides(toolEditorView);
     syncToolEditorBaseline();
@@ -1555,9 +1581,12 @@
     setControlsOpen(true);
     setToolEditorStatus('Loading saved tool settings…', false);
     updateToolEditorSaveState();
-    setTimeout(function () { el.toolCountMode.focus(); }, 0);
 
     var seq = ++toolSettingsSeq;
+    setTimeout(function () {
+      if (seq !== toolSettingsSeq || !toolEditorOpen) return;
+      (toolEditorSettingsReady ? el.toolCountMode : el.toolEditorCancel).focus();
+    }, 0);
     if (toolSettingsCtrl) toolSettingsCtrl.abort();
     var ctrl = new AbortController();
     toolSettingsCtrl = ctrl;
@@ -1565,32 +1594,39 @@
       .then(function (response) { if (!response.ok) throw new Error('settings unavailable'); return response.json(); })
       .then(function (settings) {
         if (seq !== toolSettingsSeq || !toolEditorOpen) return;
+        if (!validToolSettingsResponse(settings)) throw new Error('invalid settings response');
         var normalized = normalizeToolSettingsView(settings);
         syncToolSettingsSummary(normalized);
-        if (!toolEditorDirty) {
-          var focusTarget = focusedToolEditorControl();
-          var settingsChanged = JSON.stringify(normalized) !== JSON.stringify(toolEditorView);
-          toolEditorView = normalized;
-          toolEditorDraft = cloneToolOverrides(normalized);
-          syncToolEditorBaseline();
-          syncToolCountEditor();
-          if (settingsChanged) {
-            renderToolEditorRows();
-            restoreToolEditorFocus(focusTarget);
-          }
-          setToolEditorStatus('', false);
+        var focusTarget = focusedToolEditorControl();
+        var settingsChanged = JSON.stringify(normalized) !== JSON.stringify(toolEditorView);
+        toolEditorView = normalized;
+        toolEditorDraft = cloneToolOverrides(normalized);
+        toolEditorSettingsReady = true;
+        syncToolEditorBaseline();
+        syncToolCountEditor();
+        if (settingsChanged) {
+          renderToolEditorRows();
         }
+        if (focusTarget) restoreToolEditorFocus(focusTarget);
+        else el.toolCountMode.focus();
+        setToolEditorStatus('', false);
+        updateToolEditorSaveState();
       })
       .catch(function (error) {
-        if (seq !== toolSettingsSeq || (error && error.name === 'AbortError')) return;
-        setToolEditorStatus('Could not load saved settings; live values remain editable.', true);
+        if (seq !== toolSettingsSeq || !toolEditorOpen || (error && error.name === 'AbortError')) return;
+        toolEditorSettingsReady = false;
+        setToolEditorStatus('Could not load saved settings. Close the editor and retry before making changes.', true);
+        updateToolEditorSaveState();
       })
-      .finally(function () { if (seq === toolSettingsSeq) toolSettingsCtrl = null; });
+      .finally(function () {
+        if (seq === toolSettingsSeq && toolSettingsCtrl === ctrl) toolSettingsCtrl = null;
+      });
   }
 
   function closeToolEditor(restoreFocus) {
     if (!toolEditorOpen || toolEditorSaving) return;
     toolEditorOpen = false;
+    toolEditorSettingsReady = false;
     ++toolSettingsSeq;
     if (toolSettingsCtrl) toolSettingsCtrl.abort();
     toolSettingsCtrl = null;
@@ -1610,7 +1646,7 @@
   }
 
   function saveToolSettings() {
-    if (!toolEditorOpen || toolEditorSaving) return Promise.resolve();
+    if (!toolEditorOpen || toolEditorLocked()) return Promise.resolve();
     var count = Number(el.toolCountInput.value);
     if (toolEditorDraft.toolCount !== null &&
         (!isFinite(count) || Math.floor(count) !== count || count < 1 || count > 32)) {
@@ -1888,7 +1924,7 @@
       saveToolSettings();
     });
     el.toolCountMode.addEventListener('change', function () {
-      if (!toolEditorDraft || toolEditorSaving) return;
+      if (!toolEditorDraft || toolEditorLocked()) return;
       var nextCount = el.toolCountMode.value === 'auto' ? null : automaticToolCount();
       if (nextCount === toolEditorDraft.toolCount) return;
       cancelFilamentSearch();
@@ -1900,7 +1936,7 @@
       if (toolEditorDraft.toolCount !== null) el.toolCountInput.focus();
     });
     el.toolCountInput.addEventListener('input', function () {
-      if (!toolEditorDraft || toolEditorDraft.toolCount === null) return;
+      if (!toolEditorDraft || toolEditorLocked() || toolEditorDraft.toolCount === null) return;
       var count = Number(el.toolCountInput.value);
       if (!isFinite(count) || Math.floor(count) !== count || count < 1 || count > 32) {
         el.toolCountInput.setAttribute('aria-invalid', 'true');

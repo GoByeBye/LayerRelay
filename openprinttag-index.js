@@ -10,6 +10,7 @@ const DEFAULT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RETRY_COOLDOWN_MS = 5 * 60 * 1000;
 const DEFAULT_TIMEOUT_MS = 12000;
 const DEFAULT_MIN_DATASET_ENTRIES = 100;
+const MIN_LAST_GOOD_RETENTION_RATIO = 0.5;
 const MAX_QUERY_LENGTH = 80;
 const MAX_TEXT_LENGTH = 80;
 const MAX_TYPE_LENGTH = 40;
@@ -169,6 +170,7 @@ function buildSearchIndex(materials) {
     .map((material) => ({
       id: materialId(material),
       searchText: comparable(`${material.brand} ${material.type} ${material.name}`),
+      typeTokens: [...new Set(comparable(material.type).split(' ').filter(Boolean))],
       suggestion: publicSuggestion(material),
     }))
     .sort((left, right) =>
@@ -346,6 +348,12 @@ function createOpenPrintTagIndex(options = {}) {
         maximumEntries: MAX_BRAND_ENTRIES,
       });
       const nextMaterials = normalizeDataset(materialValues, brandValues, minimumEntries);
+      const minimumRetainedEntries = materials.length
+        ? Math.ceil(materials.length * MIN_LAST_GOOD_RETENTION_RATIO)
+        : 0;
+      if (nextMaterials.length < minimumRetainedEntries) {
+        throw new Error('upstream material dataset shrank implausibly');
+      }
       install(nextMaterials);
       checkedAt = timeNow();
       nextRetryAt = 0;
@@ -375,10 +383,29 @@ function createOpenPrintTagIndex(options = {}) {
     const tokens = [...new Set(comparable(query).split(' ').filter(Boolean))];
     const suggestions = [];
     if (tokens.length) {
+      const tokenSet = new Set(tokens);
+      const matchesByTypeTokenCount = new Map();
+      let maximumTypeTokenCount = 0;
       for (const entry of searchIndex) {
         if (!tokens.every((token) => entry.searchText.includes(token))) continue;
-        suggestions.push({ ...entry.suggestion });
-        if (suggestions.length === MAX_SUGGESTIONS) break;
+        const typeTokenCount = entry.typeTokens.length > 0 &&
+          entry.typeTokens.every((token) => tokenSet.has(token))
+          ? entry.typeTokens.length
+          : 0;
+        if (!matchesByTypeTokenCount.has(typeTokenCount)) {
+          matchesByTypeTokenCount.set(typeTokenCount, []);
+        }
+        matchesByTypeTokenCount.get(typeTokenCount).push(entry);
+        maximumTypeTokenCount = Math.max(maximumTypeTokenCount, typeTokenCount);
+      }
+
+      for (let typeTokenCount = maximumTypeTokenCount;
+        typeTokenCount >= 0 && suggestions.length < MAX_SUGGESTIONS;
+        typeTokenCount--) {
+        for (const entry of matchesByTypeTokenCount.get(typeTokenCount) || []) {
+          suggestions.push({ ...entry.suggestion });
+          if (suggestions.length === MAX_SUGGESTIONS) break;
+        }
       }
     }
     return {

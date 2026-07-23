@@ -956,6 +956,101 @@ test('a delayed settings refresh restores focus without persisting effective val
   assert.equal(runtime.elements.get('tool-editor-save').disabled, true);
 });
 
+test('an unchanged settings refresh moves focus to the unlocked editor controls', async () => {
+  const toolSettings = makeToolSettingsView();
+  const runtime = createRuntime({ height: 420, toolSettings });
+  runtime.api.S.data = Object.assign({}, toolSettings.effective, { toolSettings });
+  runtime.api.openToolEditor();
+  await flushPromises();
+
+  assert.equal(runtime.elements.get('tool-count-mode').focused, true);
+  assert.equal(runtime.elements.get('tool-count-mode').disabled, false);
+});
+
+test('pending settings block an early T1 edit and retain existing T2 and T8 overrides on save', async () => {
+  let resolveSettings;
+  const toolSettingsPromise = new Promise((resolve) => { resolveSettings = resolve; });
+  const stored = makeToolSettingsView({
+    toolSlots: {
+      2: { name: 'Existing T2' },
+      8: { loaded: false, name: 'Reserve T8' },
+    },
+    detected: { source: 'connect', status: 'fresh', toolCount: 8, toolSlots: [] },
+  });
+  const live = makeToolSettingsView({
+    detected: { source: 'connect', status: 'fresh', toolCount: 1, toolSlots: [] },
+  });
+  const runtime = createRuntime({ height: 420, toolSettings: stored, toolSettingsPromise });
+  runtime.api.S.data = Object.assign({}, live.effective, { toolSettings: live });
+  runtime.api.openToolEditor();
+
+  const earlyT1 = runtime.api.getToolEditorRows()[0];
+  assert.equal(earlyT1.input.disabled, true);
+  assert.equal(runtime.elements.get('tool-count-mode').disabled, true);
+  earlyT1.input.value = 'Too-early T1';
+  earlyT1.input.dispatch('input');
+  await runtime.api.saveToolSettings();
+  assert.equal(runtime.fetchCalls.filter(
+    (call) => call.url === '/api/settings/tools' && call.options.method === 'PUT',
+  ).length, 0);
+
+  resolveSettings(stored);
+  await flushPromises();
+  const rows = runtime.api.getToolEditorRows();
+  assert.equal(rows[0].input.disabled, false);
+  assert.equal(rows[1].input.value, 'Existing T2');
+  assert.equal(rows[7].input.value, 'Reserve T8');
+  rows[0].input.value = 'New T1';
+  rows[0].input.dispatch('input');
+  await runtime.api.saveToolSettings();
+
+  const saveCall = runtime.fetchCalls.find(
+    (call) => call.url === '/api/settings/tools' && call.options.method === 'PUT',
+  );
+  assert.deepEqual(JSON.parse(saveCall.options.body), {
+    toolCount: null,
+    toolSlots: {
+      1: { name: 'New T1' },
+      2: { name: 'Existing T2' },
+      8: { loaded: false, name: 'Reserve T8' },
+    },
+  });
+});
+
+test('failed settings loads stay read-only and direct the user to close and retry', async () => {
+  const runtime = createRuntime({ height: 420, settingsFailure: true });
+  runtime.api.openToolEditor();
+  await flushPromises();
+
+  const row = runtime.api.getToolEditorRows()[0];
+  assert.equal(row.loaded.disabled, true);
+  assert.equal(row.color.disabled, true);
+  assert.equal(row.input.disabled, true);
+  assert.equal(runtime.elements.get('tool-count-mode').disabled, true);
+  assert.equal(runtime.elements.get('tool-editor-save').disabled, true);
+  assert.equal(runtime.elements.get('tool-editor-cancel').disabled, false);
+  assert.match(runtime.elements.get('tool-editor-status').textContent, /Close the editor and retry/);
+  await runtime.api.saveToolSettings();
+  assert.equal(runtime.fetchCalls.filter(
+    (call) => call.url === '/api/settings/tools' && call.options.method === 'PUT',
+  ).length, 0);
+});
+
+test('malformed successful settings responses do not unlock destructive full saves', async () => {
+  const runtime = createRuntime({ height: 420, toolSettings: {} });
+  runtime.api.openToolEditor();
+  await flushPromises();
+  await flushPromises();
+
+  assert.equal(runtime.api.getToolEditorRows()[0].input.disabled, true);
+  assert.equal(runtime.elements.get('tool-editor-save').disabled, true);
+  assert.match(runtime.elements.get('tool-editor-status').textContent, /Close the editor and retry/);
+  await runtime.api.saveToolSettings();
+  assert.equal(runtime.fetchCalls.filter(
+    (call) => call.url === '/api/settings/tools' && call.options.method === 'PUT',
+  ).length, 0);
+});
+
 test('invalid custom counts and failed saves keep the independent draft open', async () => {
   const runtime = createRuntime({
     height: 420,
