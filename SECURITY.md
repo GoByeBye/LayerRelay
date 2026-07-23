@@ -31,3 +31,15 @@ Never submit a real `config.json`, passwords, OAuth refresh tokens, private RTSP
 ## Deployment boundary
 
 The default local-only listener is part of the security model. Binding the service to a LAN or public interface exposes dashboard data and may expose relayed camera imagery. Use host firewall rules or an authenticated reverse proxy, and review the deployment documentation before enabling remote access.
+
+The dashboard's only write endpoint is scoped to non-secret tool inventory
+overrides: count, spool name, loaded state, and colour. Automatic Connect values
+remain read-only. The endpoint does not expose or rewrite `config.json` and
+does not send commands to the printer. A remotely reachable deployment also
+exposes that settings surface, so the same firewall or authenticated reverse
+proxy requirement applies. Settings writes accept loopback and literal-IP hosts
+by default, which protects the native and Compose loopback deployments from DNS
+rebinding even though the container listens on `0.0.0.0`. A named host is denied
+unless its exact browser origin appears in `toolSettingsAllowedOrigins`; use that
+allowlist only behind the authenticated proxy or equivalent boundary that owns
+the named origin.

@@ -20,6 +20,7 @@ test('loads a file and applies typed environment overrides', () => {
     username: 'maker',
     password: 'secret',
     port: 8787,
+    toolSettingsAllowedOrigins: ['https://relay.example'],
   }));
 
   const runtime = loadRuntimeConfig({
@@ -39,6 +40,7 @@ test('loads a file and applies typed environment overrides', () => {
   assert.equal(runtime.config.cameraStreamEnabled, true);
   assert.equal(runtime.config.useConnect, true);
   assert.equal(runtime.config.sourceCodeUrl, 'https://code.example/overlay/tree/test');
+  assert.deepEqual(runtime.config.toolSettingsAllowedOrigins, ['https://relay.example']);
   assert.equal(runtime.configPath, path.join(rootDir, 'custom.json'));
   assert.equal(runtime.dataDir, path.join(rootDir, 'runtime-data'));
 });
@@ -57,6 +59,7 @@ test('supports an environment-only container configuration', () => {
   assert.equal(runtime.source, 'environment');
   assert.equal(runtime.config.printerHost, '192.0.2.10');
   assert.equal(runtime.config.password, '  secret with spaces  ');
+  assert.equal(runtime.config.toolCount, null);
 });
 
 test('accepts LayerRelay-prefixed environment overrides', () => {
@@ -121,6 +124,13 @@ test('rejects schema typos and unsafe poll cadences', () => {
     [{ pollIntervlMs: 2000 }, /unknown setting: pollIntervlMs/],
     [{ toolSlots: [{ name: 'PLA' }] }, /toolSlots must be an object/],
     [{ toolSlots: { 1: { material: 'PLA' } } }, /unknown toolSlots.1 setting/],
+    [{ toolSlots: { 0: { name: 'PLA' } } }, /numeric keys from 1 to 32/],
+    [{ toolSlots: { '01': { name: 'PLA' } } }, /numeric keys from 1 to 32/],
+    [{ toolSlots: { 33: { name: 'PLA' } } }, /numeric keys from 1 to 32/],
+    [{ toolSettingsAllowedOrigins: 'https://relay.example' }, /array of at most 16/],
+    [{ toolSettingsAllowedOrigins: ['file:///relay'] }, /exact HTTP\(S\) origin/],
+    [{ toolSettingsAllowedOrigins: ['https://relay.example/path'] }, /exact HTTP\(S\) origin/],
+    [{ toolSettingsAllowedOrigins: ['https://relay.example', 'https://relay.example'] }, /must be unique/],
     [{ sourceCodeUrl: null }, /sourceCodeUrl must be a non-empty string/],
     [{ sourceCodeUrl: '' }, /sourceCodeUrl must be a non-empty string/],
     [{ sourceCodeUrl: 'file:///tmp/source' }, /must use http/],

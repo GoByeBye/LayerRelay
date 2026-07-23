@@ -70,12 +70,14 @@ for (const [setting, definition] of Object.entries(configSchema.properties)) {
   }
 }
 for (const [parent, properties] of [
-  ['toolSlots.<n>', configSchema.properties.toolSlots.patternProperties['^[1-9][0-9]*$'].properties],
+  ['toolSlots.<n>', configSchema.properties.toolSlots.patternProperties['^(?:[1-9]|[12][0-9]|3[0-2])$'].properties],
 ]) {
   const example = Object.values(configExample.toolSlots)[0];
   for (const setting of Object.keys(properties)) {
     requireConfigTableRow(`${parent}.${setting}`, 4);
-    if (!example || !Object.hasOwn(example, setting)) {
+    // An empty toolSlots object is the recommended automatic-Connect default.
+    // If an explicit example override is present, keep it complete.
+    if (example && !Object.hasOwn(example, setting)) {
       throw new Error(`config.example.json must include nested config setting: ${parent}.${setting}`);
     }
   }
@@ -124,7 +126,7 @@ if (!artworkProvenance.includes(`Published SHA-256:\n  ${bannerSha256}`)) {
 }
 const ciWorkflow = fs.readFileSync(path.join(rootDir, '.github', 'workflows', 'ci.yml'), 'utf8');
 for (const marker of ['name: Bun source archive', 'git archive --format=tar.gz',
-  'docs/assets/banner\\.webp', 'bun run doctor']) {
+  'docs/assets/(banner|dashboard-preview|overlay-preview)\\.webp', 'bun run doctor']) {
   if (!ciWorkflow.includes(marker)) throw new Error(`CI source-archive gate is missing marker: ${marker}`);
 }
 const restartScript = fs.readFileSync(path.join(rootDir, 'tools', 'restart-overlay.ps1'), 'utf8');

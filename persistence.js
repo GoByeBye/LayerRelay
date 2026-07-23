@@ -76,6 +76,19 @@ function readJsonWithBackup(file, fallback = null) {
   return result.source ? result.value : fallback;
 }
 
+function readJsonValidatedWithBackup(file, normalize, fallback = null) {
+  if (typeof normalize !== 'function') throw new TypeError('normalize must be a function');
+  for (const candidate of [file, `${file}.bak`]) {
+    const parsed = tryReadJson(candidate);
+    if (!parsed.ok) continue;
+    try {
+      const value = normalize(parsed.value);
+      if (value != null) return value;
+    } catch { /* Try the independently written backup after semantic corruption. */ }
+  }
+  return fallback;
+}
+
 function quarantineFile(file, suffix = Date.now()) {
   if (!fs.existsSync(file)) return null;
   const target = `${file}.corrupt-${suffix}`;
@@ -123,6 +136,7 @@ function sanitizeCompletedJob(value, normalizeName = (name) => String(name || ''
 
 module.exports = {
   readJsonDetailed,
+  readJsonValidatedWithBackup,
   readJsonWithBackup,
   quarantineJsonPair,
   sanitizeCompletedJob,

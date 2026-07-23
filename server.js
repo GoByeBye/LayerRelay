@@ -5,6 +5,7 @@ if (typeof Bun === 'undefined' || !Bun.semver.satisfies(Bun.version, BUN_RANGE))
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const net = require('node:net');
 const express = require('express');
 const { loadRuntimeConfig } = require('./config.js');
 const { digestGet, digestGetJson } = require('./digest.js');
@@ -33,8 +34,20 @@ const { CameraStream } = require('./camera-stream.js');
 const { pruneAnalysisCache } = require('./cache-retention.js');
 const { preferredPrintName } = require('./print-name.js');
 const { sampleHealth, selectTelemetrySource } = require('./telemetry-freshness.js');
+const { createHttpsRequest } = require('./https-request.js');
+const { createHttpErrorHandler } = require('./http-error-handler.js');
+const {
+  createToolSettingsStore,
+  mergeConnectToolInventory,
+  normalizeDetectedToolSettings,
+  normalizeToolSettings,
+  resolveToolSettings,
+  restoreCachedConnectToolInventory,
+} = require('./tool-settings.js');
+const { createOpenPrintTagIndex } = require('./openprinttag-index.js');
 const {
   readJsonDetailed,
+  readJsonValidatedWithBackup,
   readJsonWithBackup,
   quarantineJsonPair,
   sanitizeCompletedJob,
@@ -53,6 +66,17 @@ fs.mkdirSync(CACHE_DIR, { recursive: true, mode: 0o700 });
 if (process.platform !== 'win32') {
   try { fs.chmodSync(CACHE_DIR, 0o700); } catch { /* Best effort for bind mounts and network filesystems. */ }
 }
+const toolSettingsStore = createToolSettingsStore({
+  dataFile: path.join(CACHE_DIR, 'tool-settings.json'),
+  defaults: { toolCount: cfg.toolCount, toolSlots: cfg.toolSlots },
+  logger: console,
+});
+const openPrintTagIndex = createOpenPrintTagIndex({
+  dataFile: path.join(CACHE_DIR, 'openprinttag-materials-v1.json'),
+  request: createHttpsRequest({ maxResponseBytes: 512 * 1024 }),
+  logger: console,
+});
+void openPrintTagIndex.refresh();
 const ANALYSIS_CACHE_OPTIONS = Object.freeze({
   maxEntries: cfg.analysisCacheMaxEntries,
   maxBytes: cfg.analysisCacheMaxBytes,
@@ -62,6 +86,7 @@ const CONNECT_TOKEN_FILE = path.join(CACHE_DIR, 'connect-token.json');
 const NETATMO_TOKEN_FILE = path.join(CACHE_DIR, 'netatmo-token.json');
 const COMPLETED_JOB_FILE = path.join(CACHE_DIR, 'completed-job.json');
 const CONNECT_JOB_FILE = path.join(CACHE_DIR, 'connect-job.json');
+const CONNECT_TOOL_INVENTORY_FILE = path.join(CACHE_DIR, 'connect-tool-inventory.json');
 const THUMB_META_FILE = path.join(CACHE_DIR, 'thumbnail.json');
 const MAX_THUMB_BYTES = 16 * 1024 * 1024;
 const LASTSTATE_WRITE_MS = Math.max(5000, Number(cfg.lastStateWriteMs) || 10000);
@@ -70,7 +95,17 @@ const LASTSTATE_WRITE_MS = Math.max(5000, Number(cfg.lastStateWriteMs) || 10000)
 // Inert unless a refresh token AND printer uuid are configured, so the local-only path is unaffected.
 const connectAuth = new ConnectAuth(cfg, CONNECT_TOKEN_FILE);
 const connectEnabled = connectAuth.hasCredentials() && !!cfg.connectPrinterUuid && cfg.useConnect !== false;
+const connectPrinterIdentity = typeof cfg.connectPrinterUuid === 'string' && cfg.connectPrinterUuid.trim()
+  ? cfg.connectPrinterUuid.trim() : null;
 let connectLive = null;       // last mapped Connect telemetry (see mapConnectToState)
+const restoredConnectToolInventory = readJsonValidatedWithBackup(
+  CONNECT_TOOL_INVENTORY_FILE,
+  (saved) => restoreCachedConnectToolInventory(saved, connectPrinterIdentity, connectEnabled),
+  null,
+);
+let connectToolInventory = restoredConnectToolInventory; // failed polls retain this last-known inventory
+let connectToolInventoryAt = 0;
+let connectToolInventorySignature = JSON.stringify(connectToolInventory);
 let connectLastGoodAt = 0;    // epoch sec of the last successful Connect read
 let connectOnline = false;    // did the most recent Connect poll succeed?
 let connectFailures = 0;      // consecutive Connect failures (for log throttling)
@@ -241,7 +276,6 @@ function retainedConnectAssetKey(allowCompleted = true, localJobKey = null) {
 connectAssets = sanitizeConnectAssets(readJsonWithBackup(CONNECT_JOB_FILE, null));
 restoreThumbnail();
 
-const toolCount = cfg.toolCount;
 const cleanSlotText = (value, max = 80) => {
   if (typeof value !== 'string') return null;
   const out = value.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -254,16 +288,6 @@ const printNameOverrides = new Map(Object.entries(rawPrintNameOverrides)
   .filter(([key, value]) => key && value));
 const printNameOverrideFor = (jobKey) => jobKey
   ? printNameOverrides.get(String(jobKey).toLocaleLowerCase()) || null : null;
-const toolSlots = Array.from({ length: toolCount }, (_, toolIndex) => {
-  const toolLabel = toolIndex + 1;
-  const raw = cfg.toolSlots[String(toolLabel)];
-  const name = cleanSlotText(raw?.name);
-  const color = raw?.color || null;
-  const loaded = typeof raw?.loaded === 'boolean' ? raw.loaded
-    : !!(name || color) || null;
-  return { toolIndex, toolLabel, loaded, name, material: null, color };
-});
-
 function stateSignature(value) {
   return `${value.state || ''}|${value.thumbnailKey || cleanName(value.name) || ''}`;
 }
@@ -777,6 +801,23 @@ async function connectPoll() {
     const j = await fetchPrinter(connectAuth, cfg.connectPrinterUuid);
     const mapped = mapConnectToState(j, cleanName);
     connectLive = mapped;
+    if (mapped.toolInventory && mapped.toolInventory.toolCount != null) {
+      connectToolInventory = mergeConnectToolInventory(connectToolInventory, mapped.toolInventory);
+      connectToolInventoryAt = Math.floor(Date.now() / 1000);
+      const signature = JSON.stringify(connectToolInventory);
+      if (signature !== connectToolInventorySignature) {
+        try {
+          writeJsonAtomic(CONNECT_TOOL_INVENTORY_FILE, {
+            version: 2,
+            printerUuid: connectPrinterIdentity,
+            ...connectToolInventory,
+          });
+          connectToolInventorySignature = signature;
+        } catch (error) {
+          console.error(`[connect-tools] persistence failed: ${error && error.code ? error.code : 'write error'}`);
+        }
+      }
+    }
     connectLastGoodAt = Math.floor(Date.now() / 1000);
     connectOnline = true;
     connectFailures = 0;
@@ -858,13 +899,16 @@ function mergeConnect(base, nowSec = Math.floor(Date.now() / 1000)) {
   const out = { ...base };
   const keys = ['timeRemainingSec', 'timeElapsedSec', 'nozzleTemp',
     'nozzleTarget', 'bedTemp', 'bedTarget', 'axisZ', 'flow', 'speed', 'fanHotend', 'fanPrint',
-    'material', 'chamberTemp', 'chamberTarget'];
+    'chamberTemp', 'chamberTarget'];
   for (const k of keys) if (c[k] != null) out[k] = c[k];
   // These fields are meaningful when null (for example an idle printer has no progress/tool).
   out.state = c.state;
   out.progress = c.progress;
   out.currentTool = c.currentTool;
   out.toolLabel = c.toolLabel;
+  // Material is tied to Connect's current tool. Its null value is meaningful
+  // (empty/unknown), so never retain material from a different local tool.
+  out.material = c.material;
   out.activity = c.activity || (c.state === base.state ? base.activity || null : null);
   const connectJobKey = c.jobId != null || c.fileName ? jobKeyOf(c.jobId, c.fileName) : null;
   if (connectJobKey) {
@@ -944,19 +988,131 @@ app.get('/source', (_req, res) => {
   res.redirect(302, sourceCodeUrl);
 });
 
+function currentToolDetection(nowSec = Math.floor(Date.now() / 1000)) {
+  if (!connectToolInventory) {
+    return { source: null, status: 'unavailable', toolCount: null, toolSlots: [] };
+  }
+  const health = sampleHealth(connectToolInventoryAt, connectOnline, nowSec);
+  return {
+    source: 'connect',
+    status: health.online ? 'fresh' : 'stale',
+    toolCount: connectToolInventory.toolCount,
+    toolSlots: connectToolInventory.toolSlots,
+  };
+}
+
+function currentToolSettingsView(minimumToolCount, settings = toolSettingsStore.get(), nowSec) {
+  const resolved = resolveToolSettings(settings, currentToolDetection(nowSec), { minimumToolCount });
+  return {
+    ...settings,
+    detected: resolved.detected,
+    effective: {
+      toolCount: resolved.toolCount,
+      toolCountSource: resolved.toolCountSource,
+      countAdjusted: resolved.countAdjusted,
+      toolSlots: resolved.toolSlots,
+    },
+  };
+}
+
+app.get('/api/settings/tools', (_req, res) => {
+  const merged = mergeConnect(state);
+  res.json(currentToolSettingsView(merged.out && merged.out.toolLabel));
+});
+
+const toolSettingsJson = express.json({ limit: '16kb', strict: true });
+function isLoopbackHostname(value) {
+  let hostname = String(value || '').trim().toLowerCase().replace(/\.$/, '');
+  if (hostname.startsWith('[') && hostname.endsWith(']')) hostname = hostname.slice(1, -1);
+  if (hostname === 'localhost' || hostname === '::1') return true;
+  if (net.isIP(hostname) === 4) return hostname.split('.')[0] === '127';
+  if (net.isIP(hostname) === 6 && hostname.startsWith('::ffff:')) {
+    return hostname.slice('::ffff:'.length).split('.')[0] === '127';
+  }
+  return false;
+}
+
+const toolSettingsAllowedOrigins = new Set(cfg.toolSettingsAllowedOrigins || []);
+const toolSettingsAllowedHosts = new Set([...toolSettingsAllowedOrigins]
+  .map((origin) => new URL(origin).host.toLowerCase()));
+function sameOriginSettingsWrite(req, res, next) {
+  // Origin/Fetch-Metadata checks alone do not stop DNS rebinding because a hostile
+  // hostname remains same-origin after it resolves to a local address. Accept
+  // loopback and literal-IP Hosts by default; named Hosts require an explicit origin.
+  const requestHost = String(req.get('host') || '').trim().toLowerCase();
+  const requestHostname = String(req.hostname || '').trim().toLowerCase().replace(/\.$/, '');
+  const addressHost = isLoopbackHostname(requestHostname) || net.isIP(
+    requestHostname.startsWith('[') && requestHostname.endsWith(']')
+      ? requestHostname.slice(1, -1) : requestHostname,
+  ) !== 0;
+  if (!addressHost && !toolSettingsAllowedHosts.has(requestHost)) {
+    return res.status(403).json({ error: 'settings host rejected' });
+  }
+  const fetchSite = String(req.get('sec-fetch-site') || '').trim().toLowerCase();
+  if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') {
+    return res.status(403).json({ error: 'cross-origin settings write rejected' });
+  }
+  const origin = req.get('origin');
+  if (origin) {
+    try {
+      const parsedOrigin = new URL(origin);
+      if (parsedOrigin.host.toLowerCase() !== requestHost ||
+          (!addressHost && !toolSettingsAllowedOrigins.has(parsedOrigin.origin))) {
+        return res.status(403).json({ error: 'cross-origin settings write rejected' });
+      }
+    } catch {
+      return res.status(403).json({ error: 'cross-origin settings write rejected' });
+    }
+  }
+  if (!req.is('application/json')) {
+    return res.status(415).json({ error: 'content type must be application/json' });
+  }
+  return toolSettingsJson(req, res, next);
+}
+
+app.put('/api/settings/tools', sameOriginSettingsWrite, (req, res) => {
+  let normalized;
+  try {
+    normalized = normalizeToolSettings(req.body);
+  } catch {
+    return res.status(400).json({ error: 'invalid tool settings' });
+  }
+  try {
+    const saved = toolSettingsStore.replace(normalized);
+    const merged = mergeConnect(state);
+    return res.json(currentToolSettingsView(merged.out && merged.out.toolLabel, saved));
+  } catch (error) {
+    console.error(`[tool-settings] save failed: ${error && error.code ? error.code : 'write error'}`);
+    return res.status(503).json({ error: 'tool settings could not be saved' });
+  }
+});
+
+app.get('/api/filaments', (req, res) => {
+  const query = typeof req.query.q === 'string' ? req.query.q : '';
+  try {
+    return res.json(openPrintTagIndex.search(query));
+  } catch {
+    console.error('[openprinttag-index] unexpected search failure');
+    return res.json({ suggestions: [], stale: false, unavailable: true, loading: false });
+  }
+});
+
 app.get('/api/state', (_req, res) => {
   const nowSec = Math.floor(Date.now() / 1000);
   const merged = mergeConnect(state);
   const out = exposeCompletedThumbnail(merged.out);
   const { online, staleSec } = merged;
+  const toolSettings = currentToolSettingsView(out && out.toolLabel, toolSettingsStore.get(), nowSec);
   res.json({
     ...out,
     online,
     staleSec,
     updatedAt: nowSec,
     completedJob,
-    toolCount,
-    toolSlots,
+    toolCount: toolSettings.effective.toolCount,
+    toolCountSource: toolSettings.effective.toolCountSource,
+    toolSlots: toolSettings.effective.toolSlots,
+    toolSettings,
     camera: cameraStream.getStatus(),
     // Ambient room/outdoor readings from the Netatmo station (null when not configured).
     roomTemp: netatmoLive ? netatmoLive.roomTemp : null,
@@ -998,11 +1154,7 @@ app.get('/overlay', (_req, res) => {
 app.get('/', (_req, res) => { noStore(res); res.sendFile(path.join(__dirname, 'public', 'overlay.html')); });
 
 // Keep all API failures JSON-only; never expose Express's HTML stack/path response.
-app.use((err, _req, res, next) => {
-  if (res.headersSent) return next(err);
-  console.error(`[http] ${err && err.message ? err.message : 'unknown error'}`);
-  return res.status(500).json({ error: 'internal server error' });
-});
+app.use(createHttpErrorHandler(console));
 
 // Self-scheduling poll loop: never overlaps requests (important when the printer
 // API hangs), and backs off while it's failing so we don't pile onto a struggling board.

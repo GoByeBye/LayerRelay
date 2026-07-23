@@ -25,11 +25,26 @@
       "additionalProperties": { "type": "string", "maxLength": 200 },
       "default": {}
     },
-    "toolCount": { "type": "integer", "minimum": 1, "maximum": 32, "default": 1 },
+    "toolCount": {
+      "description": "Manual tool-count override. Use null to detect the inventory from Prusa Connect.",
+      "default": null,
+      "anyOf": [
+        { "type": "null" },
+        { "type": "integer", "minimum": 1, "maximum": 32 }
+      ]
+    },
+    "toolSettingsAllowedOrigins": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^https?://[^/]+$" },
+      "default": [],
+      "description": "Exact additional browser origins allowed to write tool settings, for authenticated reverse proxies or named hosts. Loopback and literal IP origins work without entries."
+    },
     "toolSlots": {
       "type": "object",
       "patternProperties": {
-        "^[1-9][0-9]*$": {
+        "^(?:[1-9]|[12][0-9]|3[0-2])$": {
           "type": "object",
           "additionalProperties": false,
           "properties": {

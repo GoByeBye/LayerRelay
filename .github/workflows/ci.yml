@@ -137,7 +137,7 @@ jobs:
           private_paths="$(grep -Ei '(^|/)(cache|captures|snapshots|node_modules|coverage|\.claude|\.codex|\.vscode|\.idea)/|(^|/)(config\.json|credentials\.json|client_secret[^/]*\.json|tokens\.json|\.npmrc|\.DS_Store|Thumbs\.db)$|(^|/)[^/]+\.(bgcode|log|mp4|webm|pem|key)$' "$manifest" || true)"
           private_env="$(grep -Ei '(^|/)\.env($|\.)' "$manifest" | grep -Evi '/\.env\.example$' || true)"
           private_assets="$(grep -Ei '(^|/)public/assets/' "$manifest" | grep -Evi '/public/assets/$|/public/assets/README\.md$' || true)"
-          unapproved_media="$(grep -Ei '(^|/)[^/]+\.(jpg|jpeg|png|webp)$' "$manifest" | grep -Evi '^layer-relay/docs/assets/banner\.webp$' || true)"
+          unapproved_media="$(grep -Ei '(^|/)[^/]+\.(jpg|jpeg|png|webp)$' "$manifest" | grep -Evi '^layer-relay/docs/assets/(banner|dashboard-preview|overlay-preview)\.webp$' || true)"
           if [ -n "$private_paths$private_env$private_assets$unapproved_media" ]; then
             echo "source archive contains a private or machine-local path" >&2
             exit 1

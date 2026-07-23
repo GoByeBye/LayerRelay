@@ -19,6 +19,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and license provenance recorded in the source tree
 - An explicit AI-assisted development disclosure and contribution policy
 - A CI gate that installs and verifies the exact tracked source archive
+- A dashboard tool-and-filament editor with Prusa Connect-derived automatic
+  inventory, independent count/presence/name/colour overrides, Auto reset for
+  count/presence/type, persistent settings, and local type-ahead over a
+  normalized OpenPrintTag suggestion index loaded by `openprinttag-index.js`
 
 ### Changed
 
@@ -31,6 +35,11 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   transport cannot permanently stall polling
 - Prusa Connect asset work is serialized by active job, cancels stale downloads,
   retries incomplete descriptors, and rejects invalid `.bgcode` payloads
+- Startup loads the last valid OpenPrintTag snapshot, refreshes missing or stale
+  data in the background, and serves synchronous local searches without
+  persisting picker queries
+- Local filament type-ahead uses a 100 ms input debounce for near-realtime
+  suggestions
 
 ### Removed
 
@@ -41,6 +50,8 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Docker build context excludes local credentials, state, and scratch pages
 - Cloud asset downloads are restricted to authenticated same-origin Prusa Connect paths
+- Browser configuration writes are limited to the non-secret tool inventory,
+  use same-origin JSON requests, and never expose or rewrite operator credentials
 
 [Unreleased]: https://github.com/GoByeBye/LayerRelay/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/GoByeBye/LayerRelay/releases/tag/v0.1.0

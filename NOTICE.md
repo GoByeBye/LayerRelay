@@ -20,6 +20,47 @@ disclosure is informational: it does not change the project's
 disclosure is not a substitute for documenting the source and license of copied,
 adapted, generated, or vendored material.
 
+## OpenPrintTag Material Database data
+
+The optional filament picker refreshes generated public material and brand
+snapshots from the
+[`OpenPrintTag Material Database`](https://database.openprinttag.org/), whose
+source is maintained in the
+[`OpenPrintTag/openprinttag-database`](https://github.com/OpenPrintTag/openprinttag-database)
+repository. OpenPrintTag is an open-source initiative by Prusa Research, and
+the database is community-driven.
+
+LayerRelay keeps only bounded FFF identity and display fields plus a six-digit
+primary RGB colour when the source colour is fully opaque. It does not cache
+upstream photos, package details, purchase links, or material properties.
+LayerRelay searches its normalized local snapshot synchronously. Picker text is
+not included in requests to OpenPrintTag or persisted in
+`openprinttag-materials-v1.json`. The snapshot may be stale, incomplete, or
+unavailable and is never required for manual tool configuration. Upstream data
+is normalized into LayerRelay's existing tool-slot shape. No endorsement by
+Prusa Research or OpenPrintTag is implied.
+
+The upstream database is distributed under the MIT License:
+
+Copyright 2025 PRUSA RESEARCH A.S.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 ## Prusa libbgcode provenance
 
 `bgcode.js` is a JavaScript/Node.js adaptation of parts of

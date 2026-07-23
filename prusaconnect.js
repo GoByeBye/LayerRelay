@@ -328,18 +328,138 @@ function normalizePrinterState(rawState, ...jobs) {
   return STATE_MAP[raw] || 'UNKNOWN';
 }
 
+const CONNECT_TOOL_KEY = /^(?:[1-9]|[12][0-9]|3[0-2])$/;
+const MAX_CONNECT_MATERIAL_LENGTH = 80;
+
+function objectValue(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+}
+
+function normalizeConnectMaterial(value) {
+  if (typeof value !== 'string' || value.length > 4096) {
+    return { present: false, material: null, loaded: null };
+  }
+  let normalized;
+  try { normalized = value.normalize('NFKC'); }
+  catch { return { present: false, material: null, loaded: null }; }
+  normalized = normalized
+    .replace(/[\p{Cc}\p{Cf}\p{Cs}]/gu, ' ')
+    .replace(/[<>]/g, '')
+    .replace(/\s+/gu, ' ')
+    .trim();
+  if (!normalized || normalized === '---') {
+    return { present: true, material: null, loaded: false };
+  }
+  const material = Array.from(normalized).slice(0, MAX_CONNECT_MATERIAL_LENGTH).join('').trim();
+  return material
+    ? { present: true, material, loaded: true }
+    : { present: true, material: null, loaded: false };
+}
+
+function canonicalToolContainer(j) {
+  const candidates = [objectValue(j && j.tools), objectValue(j && j.slot)].filter(Boolean);
+  return candidates.find((candidate) => Object.keys(candidate).some((key) => CONNECT_TOOL_KEY.test(key))) ||
+    candidates[0] || {};
+}
+
+function numericActiveTool(j, tools) {
+  const candidates = [
+    tools && tools.active,
+    j && objectValue(j.tools)?.active,
+    j && objectValue(j.slot)?.active,
+    j && j.active,
+  ];
+  for (const value of candidates) {
+    if (Number.isInteger(value) && value >= 0 && value <= 32) {
+      return { present: true, toolLabel: value === 0 ? null : value };
+    }
+  }
+  return { present: false, toolLabel: null };
+}
+
+function mapConnectToolInventory(j = {}) {
+  const tools = canonicalToolContainer(j);
+  const labels = Object.keys(tools)
+    .filter((key) => CONNECT_TOOL_KEY.test(key))
+    .map(Number)
+    .sort((left, right) => left - right);
+  const highestLabel = labels.length ? labels[labels.length - 1] : null;
+  const numericActive = numericActiveTool(j, tools);
+  const flaggedActive = labels.find((label) => objectValue(tools[String(label)])?.active === true) || null;
+  const toolLabel = numericActive.present ? numericActive.toolLabel : flaggedActive;
+  let toolSlots = [];
+
+  if (highestLabel != null) {
+    toolSlots = Array.from({ length: highestLabel }, (_, toolIndex) => {
+      const toolLabel = toolIndex + 1;
+      const raw = objectValue(tools[String(toolLabel)]) || {};
+      const normalizedMaterial = normalizeConnectMaterial(raw.material);
+      const loaded = typeof raw.loaded === 'boolean' ? raw.loaded : normalizedMaterial.loaded;
+      return {
+        toolIndex,
+        toolLabel,
+        loaded,
+        name: null,
+        material: normalizedMaterial.material,
+        color: null,
+      };
+    });
+  } else {
+    const filament = objectValue(j.filament);
+    const normalizedMaterial = normalizeConnectMaterial(filament && filament.material);
+    if (normalizedMaterial.present) {
+      const loaded = typeof filament.loaded === 'boolean' ? filament.loaded : normalizedMaterial.loaded;
+      const fallbackToolLabel = toolLabel || 1;
+      toolSlots = Array.from({ length: fallbackToolLabel }, (_, toolIndex) => ({
+        toolIndex,
+        toolLabel: toolIndex + 1,
+        loaded: null,
+        name: null,
+        material: null,
+        color: null,
+      }));
+      toolSlots[fallbackToolLabel - 1] = {
+        toolIndex: fallbackToolLabel - 1,
+        toolLabel: fallbackToolLabel,
+        loaded,
+        name: null,
+        material: normalizedMaterial.material,
+        color: null,
+      };
+    }
+  }
+
+  const currentTool = toolLabel != null ? toolLabel - 1 : null;
+  const activeSlot = toolLabel != null ? toolSlots[toolLabel - 1] : null;
+  const fallbackMaterial = highestLabel == null
+    ? toolSlots.find((slot) => slot.material)?.material || null : null;
+
+  return {
+    toolCount: highestLabel == null ? (toolSlots.length || null) : highestLabel,
+    countAuthoritative: highestLabel != null,
+    toolSlots,
+    currentTool,
+    toolLabel,
+    material: activeSlot ? activeSlot.material : fallbackMaterial,
+  };
+}
+
+function rawConnectTool(j, toolLabel) {
+  if (toolLabel == null) return null;
+  for (const candidate of [objectValue(j.tools), objectValue(j.slot)]) {
+    const tool = candidate && objectValue(candidate[String(toolLabel)]);
+    if (tool) return tool;
+  }
+  return null;
+}
+
 // Map a Connect printer-detail object to the telemetry subset the overlay/server state uses.
 // cleanName is the server's filename cleaner (passed in to avoid duplicating it here).
 function mapConnectToState(j, cleanName) {
   const job = j.job_info || {};
   const t = j.temp || {};
-  // Active tool = the entry in `tools` flagged active. Connect keys tools 1-based, which already
-  // matches the printer UI / our toolLabel; our internal currentTool stays 0-based.
-  let activeKey = null;
-  if (j.tools) for (const k of Object.keys(j.tools)) { if (j.tools[k] && j.tools[k].active) { activeKey = k; break; } }
-  const tool = activeKey ? j.tools[activeKey] : null;
-  const toolLabel = activeKey != null ? parseInt(activeKey, 10) : null;
-  const currentTool = toolLabel != null ? toolLabel - 1 : null;
+  const mappedTools = mapConnectToolInventory(j);
+  const tool = rawConnectTool(j, mappedTools.toolLabel);
 
   const st = normalizePrinterState(j.state, j, job);
   const printing = st === 'PRINTING' || st === 'PAUSED';
@@ -368,9 +488,14 @@ function mapConnectToState(j, cleanName) {
     speed: num(j.speed),
     fanHotend: tool ? num(tool.fan_hotend) : null,
     fanPrint: tool ? num(tool.fan_print) : null,
-    currentTool,
-    toolLabel,
-    material: (tool && tool.material) || (j.filament && j.filament.material) || null,
+    currentTool: mappedTools.currentTool,
+    toolLabel: mappedTools.toolLabel,
+    material: mappedTools.material,
+    toolInventory: {
+      toolCount: mappedTools.toolCount,
+      countAuthoritative: mappedTools.countAuthoritative,
+      toolSlots: mappedTools.toolSlots,
+    },
     // Connect reports the whole-model filament weight; use it as the print's total.
     filamentG: job.model_weight != null ? Math.round(job.model_weight) : null,
     jobId: job.origin_id != null ? job.origin_id : (job.id != null ? job.id : null),
@@ -389,6 +514,7 @@ module.exports = {
   fetchPrinter,
   fetchPrinterJob,
   mapConnectJobAssets,
+  mapConnectToolInventory,
   mapConnectToState,
   normalizePrinterState,
   resolveConnectPath,

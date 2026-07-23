@@ -10,8 +10,11 @@ const DEFAULT_CONFIG = Object.freeze({
   pollIntervalMs: 2000,
   analysisCacheMaxEntries: 100,
   analysisCacheMaxBytes: 64 * 1024 * 1024,
-  toolCount: 1,
+  // null keeps the inventory automatic from Prusa Connect. An integer is a
+  // deployment-level manual override and remains backward compatible.
+  toolCount: null,
   toolSlots: {},
+  toolSettingsAllowedOrigins: [],
   printNameOverrides: {},
   localBgcodeDirs: [],
   cameraRtspUrl: '',
@@ -33,7 +36,7 @@ const KNOWN_CONFIG_KEYS = new Set([
   '$schema',
   'printerHost', 'username', 'password', 'listenHost', 'port', 'sourceCodeUrl', 'pollIntervalMs',
   'analysisCacheMaxEntries', 'analysisCacheMaxBytes', 'printNameOverrides',
-  'toolCount', 'toolSlots', 'localBgcodeDirs',
+  'toolCount', 'toolSlots', 'toolSettingsAllowedOrigins', 'localBgcodeDirs',
   'cameraRtspUrl', 'cameraStreamEnabled', 'cameraFfmpegPath', 'cameraStreamFps',
   'cameraStreamWidth', 'cameraStreamJpegQuality', 'cameraStreamThreads',
   'cameraStreamKillGraceMs', 'cameraStreamIdleMs', 'cameraStreamStallMs',
@@ -243,8 +246,8 @@ function validateConfig(config, { requirePrinter = true } = {}) {
       errors.push('toolSlots must be an object keyed by 1-based tool number');
     } else {
       for (const [slot, value] of Object.entries(config.toolSlots)) {
-        if (!/^[1-9][0-9]*$/.test(slot) || !plainObject(value)) {
-          errors.push('toolSlots entries must use 1-based numeric keys and object values');
+        if (!/^(?:[1-9]|[12][0-9]|3[0-2])$/.test(slot) || !plainObject(value)) {
+          errors.push('toolSlots entries must use numeric keys from 1 to 32 and object values');
           continue;
         }
         for (const key of Object.keys(value)) {
@@ -256,6 +259,33 @@ function validateConfig(config, { requirePrinter = true } = {}) {
         }
         if (value.color != null && (typeof value.color !== 'string' || !/^#[0-9a-f]{6}$/i.test(value.color))) {
           errors.push(`toolSlots.${slot}.color must be a six-digit hex colour`);
+        }
+      }
+    }
+  }
+  if (config.toolSettingsAllowedOrigins != null) {
+    if (!Array.isArray(config.toolSettingsAllowedOrigins) || config.toolSettingsAllowedOrigins.length > 16) {
+      errors.push('toolSettingsAllowedOrigins must be an array of at most 16 HTTP(S) origins');
+    } else {
+      const seenOrigins = new Set();
+      for (let index = 0; index < config.toolSettingsAllowedOrigins.length; index++) {
+        const value = config.toolSettingsAllowedOrigins[index];
+        let valid = typeof value === 'string' && value === value.trim() && !/[\u0000-\u001f\u007f]/.test(value);
+        let origin = null;
+        if (valid) {
+          try {
+            const parsed = new URL(value);
+            valid = ['http:', 'https:'].includes(parsed.protocol) && !parsed.username && !parsed.password &&
+              parsed.pathname === '/' && !parsed.search && !parsed.hash && value === parsed.origin;
+            origin = parsed.origin;
+          } catch { valid = false; }
+        }
+        if (!valid) {
+          errors.push(`toolSettingsAllowedOrigins.${index} must be an exact HTTP(S) origin without credentials or a path`);
+        } else if (seenOrigins.has(origin)) {
+          errors.push('toolSettingsAllowedOrigins entries must be unique');
+        } else {
+          seenOrigins.add(origin);
         }
       }
     }

@@ -10,6 +10,7 @@ const {
   classifyPrinterActivity,
   connectAssetsNeedRefresh,
   mapConnectJobAssets,
+  mapConnectToolInventory,
   mapConnectToState,
   normalizePrinterState,
   resolveConnectPath,
@@ -89,6 +90,15 @@ test('maps active tool, print telemetry, chamber data, and job identity', () => 
     currentTool: 2,
     toolLabel: 3,
     material: 'PETG',
+    toolInventory: {
+      toolCount: 3,
+      countAuthoritative: true,
+      toolSlots: [
+        { toolIndex: 0, toolLabel: 1, loaded: true, name: null, material: 'PLA', color: null },
+        { toolIndex: 1, toolLabel: 2, loaded: null, name: null, material: null, color: null },
+        { toolIndex: 2, toolLabel: 3, loaded: true, name: null, material: 'PETG', color: null },
+      ],
+    },
     filamentG: 15,
     jobId: 0,
     connectJobId: null,
@@ -119,6 +129,143 @@ test('normalizes transient states and accepts flat chamber telemetry', () => {
   assert.equal(mapped.jobId, 42);
   assert.equal(mapped.connectJobId, 42);
   assert.equal(mapped.fileName, 'part.gcode');
+  assert.deepEqual(mapped.toolInventory, {
+    toolCount: 1,
+    countAuthoritative: false,
+    toolSlots: [
+      { toolIndex: 0, toolLabel: 1, loaded: true, name: null, material: 'ASA', color: null },
+    ],
+  });
+});
+
+test('maps sparse canonical tool inventory by highest key and preserves unknown slots', () => {
+  const mapped = mapConnectToolInventory({
+    tools: {
+      1: { material: '  PLA\nSilk  ' },
+      3: { active: true, material: 'PETG' },
+      5: { loaded: false, material: 'ASA' },
+      33: { material: 'must be ignored' },
+      '01': { material: 'must also be ignored' },
+    },
+  });
+
+  assert.equal(mapped.toolCount, 5);
+  assert.equal(mapped.toolLabel, 3);
+  assert.equal(mapped.currentTool, 2);
+  assert.equal(mapped.material, 'PETG');
+  assert.deepEqual(mapped.toolSlots, [
+    { toolIndex: 0, toolLabel: 1, loaded: true, name: null, material: 'PLA Silk', color: null },
+    { toolIndex: 1, toolLabel: 2, loaded: null, name: null, material: null, color: null },
+    { toolIndex: 2, toolLabel: 3, loaded: true, name: null, material: 'PETG', color: null },
+    { toolIndex: 3, toolLabel: 4, loaded: null, name: null, material: null, color: null },
+    { toolIndex: 4, toolLabel: 5, loaded: false, name: null, material: 'ASA', color: null },
+  ]);
+});
+
+test('maps official empty material sentinels while explicit loaded booleans win', () => {
+  const mapped = mapConnectToolInventory({
+    tools: {
+      1: { material: '' },
+      2: { material: '---' },
+      3: {},
+      4: { loaded: true, material: '---' },
+      5: { loaded: false, material: 'PLA' },
+    },
+  });
+
+  assert.deepEqual(mapped.toolSlots.map((slot) => ({
+    loaded: slot.loaded,
+    material: slot.material,
+  })), [
+    { loaded: false, material: null },
+    { loaded: false, material: null },
+    { loaded: null, material: null },
+    { loaded: true, material: null },
+    { loaded: false, material: 'PLA' },
+  ]);
+});
+
+test('prefers firmware numeric active tool and treats zero as no active tool', () => {
+  const numeric = mapConnectToolInventory({
+    tools: {
+      1: { active: true, material: 'PLA' },
+      2: { material: 'PETG' },
+      active: 2,
+    },
+  });
+  assert.equal(numeric.toolLabel, 2);
+  assert.equal(numeric.currentTool, 1);
+  assert.equal(numeric.material, 'PETG');
+
+  const none = mapConnectToolInventory({
+    tools: {
+      1: { active: true, material: 'PLA' },
+      active: 0,
+    },
+  });
+  assert.equal(none.toolLabel, null);
+  assert.equal(none.currentTool, null);
+  assert.equal(none.material, null);
+
+  const firmwareSlot = mapConnectToolInventory({
+    slot: {
+      1: { material: 'PLA' },
+      3: { material: 'PETG' },
+      active: 3,
+    },
+  });
+  assert.equal(firmwareSlot.toolCount, 3);
+  assert.equal(firmwareSlot.toolLabel, 3);
+  assert.equal(firmwareSlot.material, 'PETG');
+});
+
+test('uses top-level filament only as a sanitized single-slot fallback', () => {
+  const fallback = mapConnectToolInventory({
+    tools: {},
+    filament: { material: '  <ASA>\0 Natural  ' },
+  });
+  assert.deepEqual(fallback, {
+    toolCount: 1,
+    countAuthoritative: false,
+    toolSlots: [
+      { toolIndex: 0, toolLabel: 1, loaded: true, name: null, material: 'ASA Natural', color: null },
+    ],
+    currentTool: null,
+    toolLabel: null,
+    material: 'ASA Natural',
+  });
+
+  const empty = mapConnectToolInventory({ filament: { material: '---' } });
+  assert.equal(empty.toolCount, 1);
+  assert.equal(empty.toolSlots[0].loaded, false);
+  assert.equal(empty.material, null);
+
+  const canonicalWins = mapConnectToolInventory({
+    tools: { 1: {} },
+    filament: { material: 'PLA' },
+  });
+  assert.equal(canonicalWins.toolCount, 1);
+  assert.equal(canonicalWins.toolSlots[0].loaded, null);
+  assert.equal(canonicalWins.toolSlots[0].material, null);
+  assert.equal(canonicalWins.material, null);
+
+  const activeFallback = mapConnectToolInventory({
+    active: 4,
+    filament: { material: 'PETG' },
+  });
+  assert.equal(activeFallback.toolCount, 4);
+  assert.equal(activeFallback.currentTool, 3);
+  assert.equal(activeFallback.toolLabel, 4);
+  assert.equal(activeFallback.material, 'PETG');
+  assert.deepEqual(activeFallback.toolSlots.map((slot) => ({
+    loaded: slot.loaded,
+    material: slot.material,
+  })), [
+    { loaded: null, material: null },
+    { loaded: null, material: null },
+    { loaded: null, material: null },
+    { loaded: true, material: 'PETG' },
+  ]);
 });
 
 test('maps Connect job assets while retaining the printer-local short filename', () => {
