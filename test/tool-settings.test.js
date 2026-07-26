@@ -390,6 +390,31 @@ test('replace writes a versioned atomic snapshot and swaps state only after succ
   assert.equal(store.get().toolSlots[1].name, 'New PLA');
 });
 
+test('a stale client revision cannot replace a newer tool-settings save', () => {
+  const dataFile = path.join(tempDir(), 'tool-settings.json');
+  const store = createToolSettingsStore({ dataFile, defaults });
+  const clientARevision = store.etag();
+  const clientBRevision = store.etag();
+
+  store.replace({
+    toolCount: 2,
+    toolSlots: { 1: { name: 'Client A PLA' } },
+  }, clientARevision);
+
+  assert.notEqual(store.etag(), clientBRevision);
+  assert.throws(
+    () => store.replace({
+      toolCount: 2,
+      toolSlots: { 2: { name: 'Stale client B PETG' } },
+    }, clientBRevision),
+    (error) => error && error.code === 'TOOL_SETTINGS_CONFLICT',
+  );
+  assert.deepEqual(store.get(), {
+    toolCount: 2,
+    toolSlots: { 1: { name: 'Client A PLA' } },
+  });
+});
+
 test('replace leaves in-memory state unchanged when the atomic write fails', () => {
   const directory = tempDir();
   const blockedParent = path.join(directory, 'not-a-directory');

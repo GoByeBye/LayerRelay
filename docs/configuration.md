@@ -117,6 +117,9 @@ named host or authenticated reverse proxy, add its exact browser origin (scheme,
 host, and optional non-default port, with no path) to
 `toolSettingsAllowedOrigins`. This explicit allowlist prevents DNS rebinding
 from turning an unrelated public hostname into a local settings writer.
+Each settings read returns an `ETag`; writes must send that value in `If-Match`.
+LayerRelay rejects a stale full-snapshot save with HTTP `409`, so one browser
+cannot silently overwrite settings saved by another browser.
 
 At startup, `openprinttag-index.js` loads the last valid normalized snapshot
 from `DATA_DIR/openprinttag-materials-v1.json`. When that snapshot is missing or

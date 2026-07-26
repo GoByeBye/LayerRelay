@@ -1017,6 +1017,7 @@ function currentToolSettingsView(minimumToolCount, settings = toolSettingsStore.
 
 app.get('/api/settings/tools', (_req, res) => {
   const merged = mergeConnect(state);
+  res.set('ETag', toolSettingsStore.etag());
   res.json(currentToolSettingsView(merged.out && merged.out.toolLabel));
 });
 
@@ -1078,10 +1079,22 @@ app.put('/api/settings/tools', sameOriginSettingsWrite, (req, res) => {
     return res.status(400).json({ error: 'invalid tool settings' });
   }
   try {
-    const saved = toolSettingsStore.replace(normalized);
+    const expectedEtag = req.get('if-match');
+    if (!expectedEtag) {
+      return res.status(409).json({
+        error: 'tool settings changed or were not loaded; reload settings before saving',
+      });
+    }
+    const saved = toolSettingsStore.replace(normalized, expectedEtag);
     const merged = mergeConnect(state);
+    res.set('ETag', toolSettingsStore.etag());
     return res.json(currentToolSettingsView(merged.out && merged.out.toolLabel, saved));
   } catch (error) {
+    if (error && error.code === 'TOOL_SETTINGS_CONFLICT') {
+      return res.status(409).json({
+        error: 'tool settings changed in another browser; reload settings before saving',
+      });
+    }
     console.error(`[tool-settings] save failed: ${error && error.code ? error.code : 'write error'}`);
     return res.status(503).json({ error: 'tool settings could not be saved' });
   }

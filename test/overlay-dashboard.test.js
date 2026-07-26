@@ -191,8 +191,10 @@ function createRuntime({
   settingsFailure = false,
   filamentPayload = { suggestions: [], stale: false, unavailable: false },
   saveFailure = false,
+  saveConflict = false,
   savePromise,
   saveResponse,
+  settingsRevision = '"settings-test-revision"',
 } = {}) {
   const imageRequests = [];
   const fetchRequests = [];
@@ -268,18 +270,37 @@ function createRuntime({
       if (url === '/api/settings/tools' && options.method === 'PUT') {
         const payload = JSON.parse(options.body);
         if (savePromise) return savePromise;
-        if (saveFailure) return Promise.resolve({ ok: false, json: () => Promise.resolve({ error: 'save failed' }) });
+        if (saveConflict) return Promise.resolve({
+          ok: false,
+          status: 409,
+          json: () => Promise.resolve({ error: 'tool settings changed in another browser' }),
+        });
+        if (saveFailure) return Promise.resolve({
+          ok: false,
+          status: 503,
+          json: () => Promise.resolve({ error: 'save failed' }),
+        });
         const body = typeof saveResponse === 'function' ? saveResponse(payload) :
           saveResponse || makeToolSettingsView({
             toolCount: payload.toolCount,
             toolSlots: payload.toolSlots,
             detected: toolSettings.detected,
           });
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
       }
       if (url === '/api/settings/tools') {
-        if (settingsFailure) return Promise.resolve({ ok: false, json: () => Promise.resolve({ error: 'unavailable' }) });
-        return Promise.resolve({ ok: true, json: () => toolSettingsPromise || Promise.resolve(toolSettings) });
+        if (settingsFailure) return Promise.resolve({
+          ok: false,
+          status: 503,
+          headers: { get: () => null },
+          json: () => Promise.resolve({ error: 'unavailable' }),
+        });
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: { get: (name) => String(name).toLowerCase() === 'etag' ? settingsRevision : null },
+          json: () => toolSettingsPromise || Promise.resolve(toolSettings),
+        });
       }
       if (String(url).startsWith('/api/filaments?')) {
         const payload = typeof filamentPayload === 'function' ? filamentPayload(url) : filamentPayload;
@@ -803,6 +824,7 @@ test('custom values remain saveable while Connect and OpenPrintTag suggestions a
   await saving;
   const saveCall = runtime.fetchCalls.find((call) => call.url === '/api/settings/tools' && call.options.method === 'PUT');
   assert.equal(saveCall.options.headers['Content-Type'], 'application/json');
+  assert.equal(saveCall.options.headers['If-Match'], '"settings-test-revision"');
   assert.deepEqual(JSON.parse(saveCall.options.body), {
     toolCount: null,
     toolSlots: { 1: { name: 'My custom PLA', color: '#345678' } },
@@ -1076,6 +1098,33 @@ test('invalid custom counts and failed saves keep the independent draft open', a
   assert.match(runtime.elements.get('tool-editor-status').textContent, /save failed/);
   assert.equal(runtime.elements.get('tools-editor').hidden, false);
   assert.equal(runtime.api.getToolEditorRows()[0].input.value, 'Unsaved custom PLA');
+});
+
+test('a conflicting save keeps the stale editor draft open and unchanged', async () => {
+  const runtime = createRuntime({
+    height: 420,
+    toolSettings: makeToolSettingsView({ toolCount: 1 }),
+    saveConflict: true,
+    settingsRevision: '"client-b-stale-revision"',
+  });
+  runtime.api.openToolEditor();
+  await flushPromises();
+  const row = runtime.api.getToolEditorRows()[0];
+  row.input.value = 'Client B unsaved PETG';
+  row.input.dispatch('input');
+
+  await runtime.api.saveToolSettings();
+
+  const saveCall = runtime.fetchCalls.find(
+    (call) => call.url === '/api/settings/tools' && call.options.method === 'PUT',
+  );
+  assert.equal(saveCall.options.headers['If-Match'], '"client-b-stale-revision"');
+  assert.match(runtime.elements.get('tool-editor-status').textContent, /changed in another browser/i);
+  assert.match(runtime.elements.get('tool-editor-status').textContent, /unsaved changes are still here/i);
+  assert.equal(runtime.elements.get('tools-editor').hidden, false);
+  assert.equal(row.input.value, 'Client B unsaved PETG');
+  assert.equal(row.input.disabled, false);
+  assert.equal(runtime.elements.get('tool-editor-save').disabled, false);
 });
 
 test('a stalled settings save times out and keeps the draft editable', async () => {

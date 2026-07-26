@@ -238,8 +238,8 @@ HTTP endpoints:
 - `GET /healthz` — process liveness only; printer and camera outages do not fail it
 - `GET /source` — redirects to the configured corresponding source for the running deployment
 - `GET /api/state` — merged live state, connectivity, tool inventory, and completed job
-- `GET /api/settings/tools` — non-secret override, detected, and effective tool inventory layers
-- `PUT /api/settings/tools` — same-origin JSON update for only nullable count and per-field overrides
+- `GET /api/settings/tools` — non-secret override, detected, and effective tool inventory layers, with an `ETag` revision
+- `PUT /api/settings/tools` — same-origin JSON update for only nullable count and per-field overrides; send the last GET's `ETag` as `If-Match`, and reload after a `409` conflict
 - `GET /api/filaments?q=<text>` — synchronous local OpenPrintTag suggestions; custom values never depend on them
 - `GET /api/camera.mjpeg` — long-lived shared MJPEG printer-camera stream
 - `GET /api/camera.jpg` — latest complete camera frame as a single JPEG

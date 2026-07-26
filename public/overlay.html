@@ -820,6 +820,7 @@
   var toolEditorView = null;
   var toolEditorRowRefs = [];
   var toolEditorBaselineKey = '';
+  var toolEditorRevision = null;
   var toolSettingsSeq = 0;
   var toolSettingsCtrl = null;
   var filamentSearchTimer = null;
@@ -1591,9 +1592,17 @@
     var ctrl = new AbortController();
     toolSettingsCtrl = ctrl;
     fetch(TOOL_SETTINGS_URL, { cache: 'no-store', signal: ctrl.signal })
-      .then(function (response) { if (!response.ok) throw new Error('settings unavailable'); return response.json(); })
-      .then(function (settings) {
+      .then(function (response) {
+        if (!response.ok) throw new Error('settings unavailable');
+        var revision = response.headers && response.headers.get('etag');
+        if (!revision) throw new Error('settings revision unavailable');
+        return response.json().then(function (settings) {
+          return { settings: settings, revision: revision };
+        });
+      })
+      .then(function (loaded) {
         if (seq !== toolSettingsSeq || !toolEditorOpen) return;
+        var settings = loaded.settings;
         if (!validToolSettingsResponse(settings)) throw new Error('invalid settings response');
         var normalized = normalizeToolSettingsView(settings);
         syncToolSettingsSummary(normalized);
@@ -1601,6 +1610,7 @@
         var settingsChanged = JSON.stringify(normalized) !== JSON.stringify(toolEditorView);
         toolEditorView = normalized;
         toolEditorDraft = cloneToolOverrides(normalized);
+        toolEditorRevision = loaded.revision;
         toolEditorSettingsReady = true;
         syncToolEditorBaseline();
         syncToolCountEditor();
@@ -1641,6 +1651,7 @@
     if (restoreFocus !== false) el.toolsConfigure.focus();
     toolEditorDraft = null;
     toolEditorView = null;
+    toolEditorRevision = null;
     toolEditorRowRefs = [];
     syncToolEditorBaseline();
   }
@@ -1671,7 +1682,7 @@
     var request = fetch(TOOL_SETTINGS_URL, {
       method: 'PUT',
       cache: 'no-store',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'If-Match': toolEditorRevision },
       signal: saveCtrl.signal,
       body: JSON.stringify(payload),
     });
@@ -1686,7 +1697,12 @@
     return Promise.race([request, timeout])
       .then(function (response) {
         return response.json().then(function (body) {
-          if (!response.ok) throw new Error(body && body.error ? body.error : 'Tool settings could not be saved.');
+          if (!response.ok) {
+            if (response.status === 409) {
+              throw new Error('Settings changed in another browser. Your unsaved changes are still here; close and reopen the editor to reload before saving.');
+            }
+            throw new Error(body && body.error ? body.error : 'Tool settings could not be saved.');
+          }
           return body;
         });
       })

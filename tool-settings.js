@@ -1,6 +1,7 @@
 'use strict';
 
 const nodeFs = require('node:fs');
+const crypto = require('node:crypto');
 const { writeFileAtomic } = require('./persistence.js');
 
 const SETTINGS_VERSION = 2;
@@ -146,6 +147,16 @@ function cloneToolSettings(settings) {
     toolSlots[slot] = { ...value };
   }
   return { toolCount: settings.toolCount, toolSlots };
+}
+
+function revisionFor(settings) {
+  return crypto.createHash('sha256')
+    .update(JSON.stringify(settings))
+    .digest('hex');
+}
+
+function etagFor(settings) {
+  return `"${revisionFor(settings)}"`;
 }
 
 function cleanDetectedText(value, maxLength) {
@@ -374,7 +385,15 @@ function createToolSettingsStore(options = {}) {
     get() {
       return cloneToolSettings(current);
     },
-    replace(input) {
+    etag() {
+      return etagFor(current);
+    },
+    replace(input, expectedEtag) {
+      if (expectedEtag != null && expectedEtag !== etagFor(current)) {
+        const error = new Error('tool settings changed since they were loaded');
+        error.code = 'TOOL_SETTINGS_CONFLICT';
+        throw error;
+      }
       const next = normalizeToolSettings(input);
       const persisted = JSON.stringify({ version: SETTINGS_VERSION, ...next });
       writeFileAtomic(dataFile, persisted);

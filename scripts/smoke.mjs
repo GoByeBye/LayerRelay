@@ -119,8 +119,11 @@ try {
   const initialToolsResponse = await fetch(`${baseUrl}/api/settings/tools`);
   const initialToolsText = await initialToolsResponse.text();
   const initialTools = JSON.parse(initialToolsText);
+  const clientARevision = initialToolsResponse.headers.get('etag');
+  const clientBRevision = initialToolsResponse.headers.get('etag');
   if (!initialToolsResponse.ok || initialTools.toolCount !== null || initialTools.effective?.toolCount !== 1 ||
       initialTools.effective?.toolCountSource !== 'fallback' || initialTools.detected?.status !== 'unavailable' ||
+      !clientARevision || !clientBRevision ||
       /password|refreshToken|cameraRtspUrl|configPath/i.test(initialToolsText)) {
     throw new Error('tool settings endpoint exposed an unexpected payload');
   }
@@ -151,10 +154,36 @@ try {
       Host: `relay.example:${port}`,
       Origin: `http://relay.example:${port}`,
       'Sec-Fetch-Site': 'same-origin',
+      'If-Match': clientARevision,
     },
     body: JSON.stringify({ toolCount: 1, toolSlots: {} }),
   });
   if (!allowedProxyWrite.ok) throw new Error('explicitly allowed proxy origin could not save tool settings');
+  const clientAUpdatedRevision = allowedProxyWrite.headers.get('etag');
+  if (!clientAUpdatedRevision || clientAUpdatedRevision === clientARevision) {
+    throw new Error('successful tool settings write did not advance its revision');
+  }
+
+  const staleClientWrite = await fetch(`${baseUrl}/api/settings/tools`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      Origin: baseUrl,
+      'If-Match': clientBRevision,
+    },
+    body: JSON.stringify({
+      toolCount: 2,
+      toolSlots: { 2: { name: 'Stale browser must not win' } },
+    }),
+  });
+  const staleClientBody = await staleClientWrite.json();
+  if (staleClientWrite.status !== 409 || !/changed|reload/i.test(staleClientBody.error || '')) {
+    throw new Error('stale tool settings write was not rejected with a clear conflict');
+  }
+  const afterConflict = await (await fetch(`${baseUrl}/api/settings/tools`)).json();
+  if (afterConflict.toolCount !== 1 || Object.keys(afterConflict.toolSlots || {}).length !== 0) {
+    throw new Error('stale tool settings write overwrote the newer client save');
+  }
 
   const wrongContentType = await fetch(`${baseUrl}/api/settings/tools`, {
     method: 'PUT',
@@ -165,7 +194,11 @@ try {
 
   const savedToolsResponse = await fetch(`${baseUrl}/api/settings/tools`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json', Origin: baseUrl },
+    headers: {
+      'Content-Type': 'application/json',
+      Origin: baseUrl,
+      'If-Match': clientAUpdatedRevision,
+    },
     body: JSON.stringify({
       toolCount: 2,
       toolSlots: { 2: { loaded: true, name: 'Prusament PETG Galaxy Black', color: '#112233' } },
@@ -188,7 +221,8 @@ try {
   await stopChild();
   startChild();
   await waitForHealth(baseUrl);
-  const restartedTools = await (await fetch(`${baseUrl}/api/settings/tools`)).json();
+  const restartedToolsResponse = await fetch(`${baseUrl}/api/settings/tools`);
+  const restartedTools = await restartedToolsResponse.json();
   const restartedState = await (await fetch(`${baseUrl}/api/state`)).json();
   if (restartedTools.toolCount !== 2 || restartedTools.toolSlots?.['2']?.name !== 'Prusament PETG Galaxy Black' ||
       restartedState.toolCount !== 2 || restartedState.toolSlots?.[1]?.color !== '#112233') {
@@ -197,7 +231,11 @@ try {
 
   const autoResponse = await fetch(`${baseUrl}/api/settings/tools`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json', Origin: baseUrl },
+    headers: {
+      'Content-Type': 'application/json',
+      Origin: baseUrl,
+      'If-Match': restartedToolsResponse.headers.get('etag'),
+    },
     body: JSON.stringify({ toolCount: null, toolSlots: { 2: { name: 'Reserve spool' } } }),
   });
   const autoTools = await autoResponse.json();
