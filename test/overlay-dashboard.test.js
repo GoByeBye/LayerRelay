@@ -726,8 +726,8 @@ test('Auto type preserves the independently selected OpenPrintTag color override
   runtime.api.openToolEditor();
   await flushPromises();
   const row = runtime.api.getToolEditorRows()[0];
-  assert.equal(Object.hasOwn(row, 'colorAuto'), false);
-  assert.equal(html.includes('Auto color'), false);
+  assert.equal(row.colorAuto.textContent, 'Auto color');
+  assert.equal(row.colorAuto.disabled, true);
   assert.equal(row.nameAuto.textContent, 'Auto type');
 
   runtime.api.selectFilamentSuggestion(row, {
@@ -737,6 +737,7 @@ test('Auto type preserves the independently selected OpenPrintTag color override
 
   assert.equal(row.input.value, 'Auto PLA');
   assert.equal(row.color.value, '#452060');
+  assert.equal(row.colorAuto.disabled, false);
   assert.equal(row.nameAuto.disabled, true);
 
   await runtime.api.saveToolSettings();
@@ -744,6 +745,35 @@ test('Auto type preserves the independently selected OpenPrintTag color override
   assert.deepEqual(JSON.parse(saveCall.options.body), {
     toolCount: null,
     toolSlots: { 1: { color: '#452060' } },
+  });
+});
+
+test('Auto color removes only the color override and restores the detected preview', async () => {
+  const runtime = createRuntime({
+    height: 420,
+    toolSettings: makeToolSettingsView({
+      toolSlots: { 1: { loaded: false, name: 'Custom PETG', color: '#123456' } },
+      detected: {
+        source: 'connect', status: 'fresh', toolCount: 1,
+        toolSlots: [{ toolIndex: 0, toolLabel: 1, loaded: true, name: 'Auto PLA', color: '#ABCDEF' }],
+      },
+    }),
+  });
+  runtime.api.openToolEditor();
+  await flushPromises();
+  const row = runtime.api.getToolEditorRows()[0];
+
+  row.colorAuto.dispatch('click');
+
+  assert.equal(row.color.value, '#ABCDEF');
+  assert.equal(row.colorAuto.disabled, true);
+  assert.equal(row.loaded.value, 'empty');
+  assert.equal(row.input.value, 'Custom PETG');
+  await runtime.api.saveToolSettings();
+  const saveCall = runtime.fetchCalls.find((call) => call.url === '/api/settings/tools' && call.options.method === 'PUT');
+  assert.deepEqual(JSON.parse(saveCall.options.body), {
+    toolCount: null,
+    toolSlots: { 1: { loaded: false, name: 'Custom PETG' } },
   });
 });
 

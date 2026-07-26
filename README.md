@@ -98,8 +98,8 @@ by default.
 Move the pointer to reveal **Dashboard**, then choose **Tools & filament**.
 Tool count, loaded/empty state, and material follow Prusa Connect automatically
 when that inventory is available. Count, presence, name, and colour can be
-overridden independently; count, presence, and type can be returned to
-**Auto** later, while **Auto type** preserves the selected colour. Changes take
+overridden independently and returned to **Auto** later. **Auto type** preserves
+the selected colour until **Auto color** is chosen. Changes take
 effect without restarting the server. Filament suggestions are optional;
 they synchronously search the currently loaded index derived from the
 OpenPrintTag material and brand snapshots. Startup loads

@@ -158,6 +158,17 @@ function normalizeCachedMaterial(value) {
   return { brandSlug, slug, brand, type, name, color };
 }
 
+function normalizeCanonicalCachedMaterial(value) {
+  const normalized = normalizeCachedMaterial(value);
+  if (!normalized) return null;
+  const expectedKeys = ['brandSlug', 'slug', 'brand', 'type', 'name', 'color'];
+  const keys = Object.keys(value);
+  if (keys.length !== expectedKeys.length || keys.some((key) => !expectedKeys.includes(key))) {
+    return null;
+  }
+  return expectedKeys.every((key) => value[key] === normalized[key]) ? normalized : null;
+}
+
 function publicSuggestion(material) {
   return {
     label: boundedLabel(`${material.brand} — ${material.name}`).trim(),
@@ -280,8 +291,11 @@ function createOpenPrintTagIndex(options = {}) {
     }
     const unique = new Map();
     for (const raw of saved.materials) {
-      const material = normalizeCachedMaterial(raw);
-      if (material && !unique.has(materialId(material))) unique.set(materialId(material), material);
+      const material = normalizeCanonicalCachedMaterial(raw);
+      if (!material) return null;
+      const id = materialId(material);
+      if (unique.has(id)) return null;
+      unique.set(id, material);
     }
     if (unique.size < minimumEntries) return null;
     const savedAt = Number(saved.checkedAt);

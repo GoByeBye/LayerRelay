@@ -379,6 +379,34 @@ test('persists only canonical OpenPrintTag fields and restores a valid backup lo
   assert.equal(calls.length, 2);
 });
 
+test('rejects a damaged primary cache instead of suppressing its canonical backup', async () => {
+  const dataFile = tempDataFile();
+  const request = datasetRequest([sourceMaterial()], [sourceBrand()]);
+  const options = {
+    request,
+    dataFile,
+    logger: SILENT_LOGGER,
+    minDatasetEntries: 1,
+    now: () => 100,
+    cacheTtlMs: 1000,
+  };
+  const index = createOpenPrintTagIndex(options);
+  await index.refresh();
+  const canonical = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
+
+  for (const damaged of [
+    [...canonical.materials, { ...canonical.materials[0] }],
+    [{ ...canonical.materials[0], color: '#112233ff' }],
+    [{ ...canonical.materials[0], unexpected: true }],
+  ]) {
+    fs.writeFileSync(dataFile, JSON.stringify({ ...canonical, materials: damaged }));
+    const restored = createOpenPrintTagIndex(options);
+    assert.deepEqual(restored.search('black').suggestions, [
+      { label: 'Acme — PLA Black', color: '#112233' },
+    ]);
+  }
+});
+
 test('deduplicates concurrent two-snapshot refreshes', async () => {
   const materialsGate = deferred();
   const brandsGate = deferred();
