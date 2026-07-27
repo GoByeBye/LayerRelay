@@ -6,6 +6,10 @@ const SOI = Buffer.from([0xff, 0xd8]);
 const EOI = Buffer.from([0xff, 0xd9]);
 const FRAME_TRAILER = Buffer.from('\r\n');
 const BOUNDARY = 'frame';
+const NATIVE_PROFILE = 'native';
+const ENHANCED_1440P_PROFILE = 'enhanced-1440p';
+const ENHANCED_1440P_MIN_WIDTH = 2560;
+const CAMERA_STREAM_PROFILES = new Set([NATIVE_PROFILE, ENHANCED_1440P_PROFILE]);
 
 function finiteNumber(value, fallback) {
   const number = Number(value);
@@ -22,10 +26,26 @@ function cleanCommand(value) {
   return command && !/[\u0000\r\n]/.test(command) ? command : null;
 }
 
+function normalizeCameraProfile(value) {
+  const profile = value === undefined ? NATIVE_PROFILE : value;
+  if (!CAMERA_STREAM_PROFILES.has(profile)) {
+    throw new TypeError(`cameraStreamProfile must be "${NATIVE_PROFILE}" or "${ENHANCED_1440P_PROFILE}"`);
+  }
+  return profile;
+}
+
+function effectiveOutputWidth(nativeWidth, profile) {
+  return profile === ENHANCED_1440P_PROFILE
+    ? Math.max(nativeWidth, ENHANCED_1440P_MIN_WIDTH)
+    : nativeWidth;
+}
+
 function normalizeCameraOptions(config = {}) {
   const url = typeof config.cameraRtspUrl === 'string' ? config.cameraRtspUrl.trim() : '';
   const restartBaseMs = clampInteger(config.cameraStreamRestartBaseMs, 1000, 250, 30000);
   const requestedWidth = clampInteger(config.cameraStreamWidth, 1920, 320, 3840);
+  const nativeWidth = requestedWidth - (requestedWidth % 2);
+  const profile = normalizeCameraProfile(config.cameraStreamProfile);
 
   return {
     enabled: !!url && config.cameraStreamEnabled !== false,
@@ -33,7 +53,9 @@ function normalizeCameraOptions(config = {}) {
     ffmpegPath: cleanCommand(config.cameraFfmpegPath) || 'ffmpeg',
     fps: clampInteger(config.cameraStreamFps, 24, 1, 30),
     // An even width avoids encoder failures with common YUV pixel formats.
-    width: requestedWidth - (requestedWidth % 2),
+    nativeWidth,
+    profile,
+    width: effectiveOutputWidth(nativeWidth, profile),
     jpegQuality: clampInteger(config.cameraStreamJpegQuality, 5, 2, 31),
     threads: clampInteger(config.cameraStreamThreads, 4, 1, 16),
     killGraceMs: clampInteger(config.cameraStreamKillGraceMs, 3000, 500, 10000),
@@ -55,6 +77,9 @@ function normalizeCameraOptions(config = {}) {
 }
 
 function buildFfmpegArgs(options) {
+  const scaleFilter = options.profile === ENHANCED_1440P_PROFILE
+    ? `scale=${options.width}:-2:flags=lanczos,unsharp=5:5:0.35:5:5:0`
+    : `scale=${options.width}:-2:flags=fast_bilinear`;
   return [
     '-hide_banner',
     '-loglevel', 'error',
@@ -71,7 +96,7 @@ function buildFfmpegArgs(options) {
     '-an',
     '-sn',
     '-dn',
-    '-vf', `fps=${options.fps},scale=${options.width}:-2:flags=fast_bilinear`,
+    '-vf', `fps=${options.fps},${scaleFilter}`,
     '-q:v', String(options.jpegQuality),
     '-c:v', 'mjpeg',
     '-threads', String(options.threads),
@@ -119,6 +144,35 @@ class CameraStream {
     return this.options.enabled;
   }
 
+  setProfile(profile) {
+    const normalized = normalizeCameraProfile(profile);
+    if (normalized === this.options.profile) return false;
+
+    this.options = {
+      ...this.options,
+      profile: normalized,
+      width: effectiveOutputWidth(this.options.nativeWidth, normalized),
+    };
+    this._clearRestartTimer();
+    this.restartAttempts = 0;
+    this.lastError = null;
+    this.pending = Buffer.alloc(0);
+    this.latestFrame = null;
+    this.lastFrameAt = 0;
+    this.rateWindowAt = 0;
+    this.rateWindowFrames = 0;
+    this.rateWindowBytes = 0;
+    this.measuredFps = null;
+    this.outputBytesPerSec = null;
+
+    if (this.active) {
+      if (!this.active.expectedStop) this._stopActive(true);
+    } else if (this.clients.size) {
+      this._ensureStarted();
+    }
+    return true;
+  }
+
   getStatus() {
     const now = this.now();
     const active = this.active;
@@ -148,6 +202,7 @@ class CameraStream {
       frames: this.frames,
       targetFps: this.options.fps,
       measuredFps: online ? this.measuredFps : null,
+      profile: this.options.profile,
       outputWidth: this.options.width,
       jpegQuality: this.options.jpegQuality,
       threads: this.options.threads,
@@ -295,6 +350,7 @@ class CameraStream {
   }
 
   _consume(chunk, record) {
+    if (record.expectedStop || this.active !== record || record.finished) return;
     if (!Buffer.isBuffer(chunk)) chunk = Buffer.from(chunk);
     this.pending = this.pending.length ? Buffer.concat([this.pending, chunk]) : chunk;
 
@@ -332,7 +388,7 @@ class CameraStream {
   }
 
   _publish(frame, record) {
-    if (this.active !== record || record.finished) return;
+    if (this.active !== record || record.finished || record.expectedStop) return;
     // Copy once because stdout's backing buffer may be reused after this callback.
     this.latestFrame = Buffer.from(frame);
     this.lastFrameAt = this.now();
@@ -423,9 +479,14 @@ class CameraStream {
       record.watchdog = null;
       if (this.active !== record || record.finished || record.expectedStop) return;
       this.lastError = 'Camera stream stalled';
-      const killed = record.child && record.child.kill('SIGTERM');
-      if (!killed) this._finishProcess(record, this.lastError);
-      else this._armForceKill(record);
+      if (!record.child || record.child.pid == null) {
+        this._finishProcess(record, this.lastError);
+        return;
+      }
+      record.child.kill('SIGTERM');
+      // A false return does not prove the process exited. Keep this reader
+      // authoritative until its close event so a replacement can never overlap it.
+      this._armForceKill(record);
     }, this.options.stallMs);
     if (record.watchdog && typeof record.watchdog.unref === 'function') record.watchdog.unref();
   }
@@ -438,9 +499,14 @@ class CameraStream {
       this.clearTimeout(record.watchdog);
       record.watchdog = null;
     }
-    const killed = record.child && record.child.kill('SIGTERM');
-    if (!killed) this._finishProcess(record, expected ? null : this.lastError);
-    else this._armForceKill(record);
+    if (!record.child || record.child.pid == null) {
+      this._finishProcess(record, expected ? null : this.lastError);
+      return;
+    }
+    record.child.kill('SIGTERM');
+    // `ChildProcess.kill()` returning false is not evidence that the process is gone.
+    // Wait for close before clearing `active` and allowing another upstream reader.
+    this._armForceKill(record);
   }
 
   _armForceKill(record) {
@@ -448,8 +514,13 @@ class CameraStream {
     record.forceKillTimer = this.setTimeout(() => {
       record.forceKillTimer = null;
       if (record.finished || this.active !== record) return;
-      const killed = record.child && record.child.kill('SIGKILL');
-      if (!killed) this._finishProcess(record, record.expectedStop ? null : this.lastError);
+      if (!record.child || record.child.pid == null) {
+        this._finishProcess(record, record.expectedStop ? null : this.lastError);
+        return;
+      }
+      // Even a failed SIGKILL is not proof of exit. The close event remains the
+      // authority for releasing this generation and starting a replacement.
+      record.child.kill('SIGKILL');
     }, this.options.killGraceMs);
     if (record.forceKillTimer && typeof record.forceKillTimer.unref === 'function') {
       record.forceKillTimer.unref();

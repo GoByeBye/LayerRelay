@@ -96,7 +96,7 @@
     opacity: 0; transform: translateY(-6px); pointer-events: none;
   }
   body.controls-disabled #dashboard-controls { display: none; }
-  #controls-handle, #controls-panel, .control-action, #room-toggle {
+  #controls-handle, #controls-panel, .control-action, #room-toggle, #camera-quality-toggle {
     font-family: inherit; color: #fff;
   }
   #controls-handle {
@@ -140,9 +140,17 @@
   }
   .control-action:hover, .control-action:focus-visible { background: rgba(255, 255, 255, 0.14); outline: none; }
   .control-action:disabled { opacity: 0.42; cursor: default; }
-  #room-toggle {
+  #room-toggle, #camera-quality-toggle {
     width: 100%; border: 0; text-align: left; background: transparent; cursor: pointer;
   }
+  #room-toggle:focus-visible, #camera-quality-toggle:focus-visible {
+    border-radius: 8px; outline: 2px solid rgba(255, 138, 61, 0.7); outline-offset: 2px;
+  }
+  #camera-quality-toggle:disabled { opacity: 0.52; cursor: default; }
+  .control-note {
+    display: block; margin-top: 4px; color: #858d99; font-size: 10px; line-height: 1.35;
+  }
+  .control-note.error { color: #ff9b9e; }
   .switch-rail {
     position: relative; width: 38px; height: 22px; flex: 0 0 38px;
     border-radius: 999px; background: #363a43; transition: background 0.18s ease;
@@ -153,6 +161,8 @@
   }
   #room-toggle[aria-pressed="true"] .switch-rail { background: #ff8a3d; }
   #room-toggle[aria-pressed="true"] .switch-knob { transform: translateX(16px); background: #fff; }
+  #camera-quality-toggle[aria-checked="true"] .switch-rail { background: #ff8a3d; }
+  #camera-quality-toggle[aria-checked="true"] .switch-knob { transform: translateX(16px); background: #fff; }
   .controls-foot { margin-top: 10px; color: #858d99; font-size: 10px; line-height: 1.45; }
   .controls-legal { margin-top: 7px; color: #858d99; font-size: 10px; line-height: 1.45; }
   .controls-legal a { color: #c8ced7; text-decoration: underline; text-underline-offset: 2px; }
@@ -489,6 +499,17 @@
         </div>
         <button id="camera-retry" class="control-action" type="button">Reconnect</button>
       </div>
+      <button id="camera-quality-toggle" class="control-row" type="button" role="switch"
+              aria-checked="false" aria-labelledby="camera-quality-label camera-quality-value"
+              aria-describedby="camera-quality-status" disabled="">
+        <span class="control-copy">
+          <span class="control-label" id="camera-quality-label">Enhanced camera</span>
+          <span class="control-value" id="camera-quality-value">Loading…</span>
+          <span class="control-note" id="camera-quality-status">Affects all viewers and briefly reconnects.</span>
+        </span>
+        <span class="switch-rail" aria-hidden="true"><span class="switch-knob"></span></span>
+      </button>
+      <div id="camera-quality-announcement" class="sr-only" role="status" aria-live="polite"></div>
       <button id="room-toggle" class="control-row" type="button" aria-pressed="false">
         <span class="control-copy">
           <span class="control-label">Room temperature</span>
@@ -634,6 +655,8 @@
   var PARAMS = new URLSearchParams(location.search);
   var CAMERA_AUTO_MIN_HEIGHT = 600;        // 420px legacy overlay off, 1080px dashboard on
   var ROOM_PREF_KEY = 'layer-relay.room-visible';
+  var CAMERA_SETTINGS_URL = '/api/settings/camera';
+  var CAMERA_SETTINGS_SAVE_TIMEOUT_MS = 10000;
   var TOOL_SETTINGS_URL = '/api/settings/tools';
   var FILAMENT_SEARCH_URL = '/api/filaments';
   var FILAMENT_SEARCH_DELAY_MS = 100;
@@ -665,7 +688,8 @@
   var ROOM_VISIBLE = roomOverride == null ? storedRoomPreference() : roomOverride;
   var el = {};
   ('card cameraStage cameraFeed cameraStatusTitle cameraStatusDetail dashboardControls controlsHandle controlsPanel ' +
-    'controlsClose controlCameraState cameraRetry roomToggle roomToggleNote dashboardModeNote ' +
+    'controlsClose controlCameraState cameraRetry cameraQualityToggle cameraQualityValue cameraQualityStatus cameraQualityAnnouncement ' +
+    'roomToggle roomToggleNote dashboardModeNote ' +
     'controlsMain toolsConfigure toolSettingsSummary toolSettingsAnnouncement toolsEditor toolCountMode toolCountInput toolCountSource ' +
     'toolEditorRows toolEditorStatus toolEditorSave toolEditorCancel ' +
     'stripFill thumb thumbPh name pill offlineTag fill trackHint pct pmetaRight temp bed chamber room stats1 ' +
@@ -1741,6 +1765,228 @@
       .finally(function () { clearTimeout(saveTimeout); });
   }
 
+  var CAMERA_PROFILE_LABELS = Object.freeze({
+    native: 'Native',
+    'enhanced-1440p': 'Enhanced · Lanczos',
+  });
+  var CAMERA_GLOBAL_WARNING = 'Affects all viewers and briefly reconnects.';
+  var cameraQualityProfile = 'native';
+  var cameraQualityOutputWidth = null;
+  var cameraQualityRevision = null;
+  var cameraQualityReady = false;
+  var cameraQualitySaving = false;
+  var cameraQualityMessage = 'Loading server camera quality… ' + CAMERA_GLOBAL_WARNING;
+  var cameraQualityMessageError = false;
+  var cameraQualityIssue = null;
+  var cameraQualityLoadSeq = 0;
+  var cameraQualityLoadCtrl = null;
+
+  function validCameraProfile(value) {
+    return own(CAMERA_PROFILE_LABELS, value);
+  }
+
+  function validCameraSettingsRevision(value) {
+    return typeof value === 'string' && value.length <= 256 &&
+      /^(?:W\/)?"[^\u0000-\u0020\u007f]*"$/.test(value);
+  }
+
+  function validCameraSettingsResponse(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    var keys = Object.keys(value);
+    return keys.length === 1 && keys[0] === 'profile' && validCameraProfile(value.profile);
+  }
+
+  function cameraQualityActiveSuffix() {
+    return Number.isInteger(cameraQualityOutputWidth) ?
+      ' Active output: ' + cameraQualityOutputWidth + 'px.' : '';
+  }
+
+  function cameraQualityDefaultMessage() {
+    return CAMERA_GLOBAL_WARNING + cameraQualityActiveSuffix();
+  }
+
+  function cameraQualityIssueMessage() {
+    var lead = cameraQualityIssue === 'conflict' ?
+      'Camera quality changed in another dashboard. Current relay status is shown; reload before saving again. ' :
+      (cameraQualityIssue === 'ambiguous' ?
+        'The camera quality result is unknown. Current relay status is shown; reload before saving again. ' :
+        (cameraQualityIssue === 'rejected' ?
+          'Camera quality could not be saved. Current relay status is shown. ' :
+          'Camera quality setting unavailable. Reload to retry; the control remains disabled. '));
+    return lead + CAMERA_GLOBAL_WARNING + cameraQualityActiveSuffix();
+  }
+
+  function syncCameraQualityUi(message, isError) {
+    if (typeof message === 'string') cameraQualityMessage = message;
+    if (typeof isError === 'boolean') cameraQualityMessageError = isError;
+    var hasKnownProfile = cameraQualityReady || Number.isInteger(cameraQualityOutputWidth);
+    setText(el.cameraQualityValue, hasKnownProfile ? CAMERA_PROFILE_LABELS[cameraQualityProfile] : 'Loading…');
+    setText(el.cameraQualityStatus, cameraQualityMessage);
+    el.cameraQualityStatus.classList.toggle('error', cameraQualityMessageError);
+    el.cameraQualityToggle.setAttribute(
+      'aria-checked',
+      cameraQualityProfile === 'enhanced-1440p' ? 'true' : 'false',
+    );
+    el.cameraQualityToggle.setAttribute('aria-busy', cameraQualitySaving ? 'true' : 'false');
+    if (cameraQualityMessageError) el.cameraQualityToggle.setAttribute('aria-invalid', 'true');
+    else el.cameraQualityToggle.removeAttribute('aria-invalid');
+    el.cameraQualityToggle.disabled = !cameraQualityReady || cameraQualitySaving;
+  }
+
+  function reconcileCameraQualityStatus(status) {
+    if (!status || typeof status !== 'object' || Array.isArray(status) ||
+        !validCameraProfile(status.profile) ||
+        !Number.isInteger(status.outputWidth) || status.outputWidth < 320 || status.outputWidth > 3840) {
+      return false;
+    }
+    cameraQualityOutputWidth = status.outputWidth;
+    if (!cameraQualitySaving) cameraQualityProfile = status.profile;
+    if (cameraQualityIssue && !cameraQualitySaving) {
+      syncCameraQualityUi(cameraQualityIssueMessage(), true);
+    } else if (cameraQualityReady && !cameraQualitySaving) {
+      syncCameraQualityUi(cameraQualityDefaultMessage(), false);
+    } else {
+      syncCameraQualityUi();
+    }
+    return true;
+  }
+
+  function loadCameraQualitySettings() {
+    var seq = ++cameraQualityLoadSeq;
+    if (cameraQualityLoadCtrl) cameraQualityLoadCtrl.abort();
+    var ctrl = new AbortController();
+    cameraQualityLoadCtrl = ctrl;
+    cameraQualityReady = false;
+    cameraQualitySaving = false;
+    cameraQualityRevision = null;
+    cameraQualityIssue = null;
+    syncCameraQualityUi('Loading server camera quality… ' + CAMERA_GLOBAL_WARNING, false);
+    return fetch(CAMERA_SETTINGS_URL, {
+      cache: 'no-store',
+      credentials: 'same-origin',
+      mode: 'same-origin',
+      signal: ctrl.signal,
+    })
+      .then(function (response) {
+        if (!response.ok) throw new Error('camera settings unavailable');
+        var revision = response.headers && response.headers.get('etag');
+        if (!validCameraSettingsRevision(revision)) throw new Error('camera settings revision unavailable');
+        return response.json().then(function (settings) {
+          return { settings: settings, revision: revision };
+        });
+      })
+      .then(function (loaded) {
+        if (seq !== cameraQualityLoadSeq) return;
+        if (!validCameraSettingsResponse(loaded.settings)) throw new Error('invalid camera settings response');
+        cameraQualityProfile = loaded.settings.profile;
+        cameraQualityRevision = loaded.revision;
+        cameraQualityReady = true;
+        cameraQualityIssue = null;
+        if (lastCameraStatus) reconcileCameraQualityStatus(lastCameraStatus);
+        syncCameraQualityUi(cameraQualityDefaultMessage(), false);
+      })
+      .catch(function (error) {
+        if (seq !== cameraQualityLoadSeq || (error && error.name === 'AbortError')) return;
+        cameraQualityReady = false;
+        cameraQualityRevision = null;
+        cameraQualityIssue = 'load';
+        var message = cameraQualityIssueMessage();
+        syncCameraQualityUi(message, true);
+        setText(el.cameraQualityAnnouncement, message);
+      })
+      .finally(function () {
+        if (seq === cameraQualityLoadSeq && cameraQualityLoadCtrl === ctrl) cameraQualityLoadCtrl = null;
+      });
+  }
+
+  function saveCameraQuality(nextProfile) {
+    if (!cameraQualityReady || cameraQualitySaving || !validCameraSettingsRevision(cameraQualityRevision) ||
+        !validCameraProfile(nextProfile) || nextProfile === cameraQualityProfile) {
+      return Promise.resolve();
+    }
+    var previousProfile = cameraQualityProfile;
+    var previousRevision = cameraQualityRevision;
+    cameraQualitySaving = true;
+    cameraQualityIssue = null;
+    var savingLabel = CAMERA_PROFILE_LABELS[nextProfile];
+    var savingMessage = 'Saving ' + savingLabel + ' for all viewers… The camera will briefly reconnect.';
+    syncCameraQualityUi(savingMessage, false);
+    setText(el.cameraQualityAnnouncement, savingMessage);
+
+    var saveCtrl = new AbortController();
+    var saveTimeout;
+    var request = fetch(CAMERA_SETTINGS_URL, {
+      method: 'PUT',
+      cache: 'no-store',
+      credentials: 'same-origin',
+      mode: 'same-origin',
+      headers: { 'Content-Type': 'application/json', 'If-Match': previousRevision },
+      signal: saveCtrl.signal,
+      body: JSON.stringify({ profile: nextProfile }),
+    });
+    var timeout = new Promise(function (_resolve, reject) {
+      saveTimeout = setTimeout(function () {
+        var error = new Error('Camera quality save timed out.');
+        error.code = 'CAMERA_SETTINGS_AMBIGUOUS';
+        error.name = 'TimeoutError';
+        reject(error);
+        saveCtrl.abort();
+      }, CAMERA_SETTINGS_SAVE_TIMEOUT_MS);
+    });
+    return Promise.race([request, timeout])
+      .then(function (response) {
+        return response.json().catch(function () {
+          var bodyError = new Error('The server returned an invalid camera quality response.');
+          bodyError.code = response.ok ? 'CAMERA_SETTINGS_AMBIGUOUS' : 'CAMERA_SETTINGS_SAVE';
+          throw bodyError;
+        }).then(function (body) {
+          if (!response.ok) {
+            var responseError = new Error(body && body.error ? body.error : 'Camera quality could not be saved.');
+            responseError.code = response.status === 409 ? 'CAMERA_SETTINGS_CONFLICT' : 'CAMERA_SETTINGS_SAVE';
+            throw responseError;
+          }
+          var revision = response.headers && response.headers.get('etag');
+          if (!validCameraSettingsResponse(body) || !validCameraSettingsRevision(revision)) {
+            var invalidError = new Error('The server returned an invalid camera quality response.');
+            invalidError.code = 'CAMERA_SETTINGS_AMBIGUOUS';
+            throw invalidError;
+          }
+          return { settings: body, revision: revision };
+        });
+      })
+      .then(function (saved) {
+        cameraQualitySaving = false;
+        cameraQualityReady = true;
+        cameraQualityProfile = saved.settings.profile;
+        cameraQualityRevision = saved.revision;
+        cameraQualityIssue = null;
+        var message = CAMERA_PROFILE_LABELS[cameraQualityProfile] +
+          ' saved for all viewers. The camera is briefly reconnecting.';
+        syncCameraQualityUi(message, false);
+        setText(el.cameraQualityAnnouncement, message);
+      })
+      .catch(function (error) {
+        cameraQualitySaving = false;
+        cameraQualityProfile = previousProfile;
+        cameraQualityRevision = previousRevision;
+        var conflict = error && error.code === 'CAMERA_SETTINGS_CONFLICT';
+        var rejected = error && error.code === 'CAMERA_SETTINGS_SAVE';
+        var ambiguous = error && (error.code === 'CAMERA_SETTINGS_AMBIGUOUS' ||
+          (!conflict && !rejected));
+        if (conflict || ambiguous) {
+          cameraQualityReady = false;
+          cameraQualityRevision = null;
+        } else {
+          cameraQualityReady = true;
+        }
+        cameraQualityIssue = conflict ? 'conflict' : (ambiguous ? 'ambiguous' : 'rejected');
+        var message = cameraQualityIssueMessage();
+        syncCameraQualityUi(message, true);
+        setText(el.cameraQualityAnnouncement, message);
+      })
+      .finally(function () { clearTimeout(saveTimeout); });
+  }
+
   var cameraRetryTimer = null;
   var cameraFailures = 0;
   var cameraGeneration = 0;
@@ -1776,6 +2022,7 @@
 
   function applyCameraStatus(status) {
     lastCameraStatus = status;
+    reconcileCameraQualityStatus(status);
     // An explicit disabled flag is authoritative. Closing the image subscriber here also
     // guarantees a server-side config change cannot leave an unnecessary ffmpeg consumer.
     if (status && status.enabled === false) {
@@ -1937,9 +2184,15 @@
     document.body.classList.toggle('controls-disabled', !CONTROLS_ENABLED);
     syncRoomPreference();
     syncCameraMode(CAMERA_ENABLED);
+    loadCameraQualitySettings();
 
     el.cameraRetry.addEventListener('click', function () {
       connectCamera(true);
+      revealControls();
+    });
+    el.cameraQualityToggle.addEventListener('click', function () {
+      if (!cameraQualityReady || cameraQualitySaving) return;
+      saveCameraQuality(cameraQualityProfile === 'enhanced-1440p' ? 'native' : 'enhanced-1440p');
       revealControls();
     });
     el.roomToggle.addEventListener('click', function () {

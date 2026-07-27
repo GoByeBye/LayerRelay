@@ -184,6 +184,15 @@ function createRuntime({
   search = '',
   storedRoom = null,
   cameraStatus,
+  cameraSettings = { profile: 'native' },
+  cameraSettingsPromise,
+  cameraSettingsFailure = false,
+  cameraSettingsRevision = '"camera-settings-test-revision"',
+  cameraSavedRevision = '"camera-settings-saved-revision"',
+  cameraSaveFailure = false,
+  cameraSaveConflict = false,
+  cameraSavePromise,
+  cameraSaveResponse,
   stateFailure = false,
   state,
   toolSettings = makeToolSettingsView(),
@@ -264,8 +273,57 @@ function createRuntime({
       if (url === '/api/state') {
         if (stateFailure) return Promise.reject(new Error('state unavailable'));
         const payload = cameraStatus === undefined ?
-          { enabled: true, running: true, online: true } : cameraStatus;
+          {
+            enabled: true,
+            running: true,
+            online: true,
+            profile: cameraSettings && cameraSettings.profile,
+            outputWidth: cameraSettings && cameraSettings.profile === 'enhanced-1440p' ? 2560 : 1920,
+          } : cameraStatus;
         return Promise.resolve({ ok: true, json: () => Promise.resolve(state || { camera: payload }) });
+      }
+      if (url === '/api/settings/camera' && options.method === 'PUT') {
+        const payload = JSON.parse(options.body);
+        if (cameraSavePromise) return cameraSavePromise;
+        if (cameraSaveConflict) return Promise.resolve({
+          ok: false,
+          status: 409,
+          headers: { get: () => null },
+          json: () => Promise.resolve({ error: 'camera settings changed in another dashboard' }),
+        });
+        if (cameraSaveFailure) return Promise.resolve({
+          ok: false,
+          status: 503,
+          headers: { get: () => null },
+          json: () => Promise.resolve({ error: 'camera quality save failed' }),
+        });
+        const body = typeof cameraSaveResponse === 'function'
+          ? cameraSaveResponse(payload)
+          : cameraSaveResponse || { profile: payload.profile };
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: {
+            get: (name) => String(name).toLowerCase() === 'etag' ? cameraSavedRevision : null,
+          },
+          json: () => Promise.resolve(body),
+        });
+      }
+      if (url === '/api/settings/camera') {
+        if (cameraSettingsFailure) return Promise.resolve({
+          ok: false,
+          status: 503,
+          headers: { get: () => null },
+          json: () => Promise.resolve({ error: 'unavailable' }),
+        });
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: {
+            get: (name) => String(name).toLowerCase() === 'etag' ? cameraSettingsRevision : null,
+          },
+          json: () => cameraSettingsPromise || Promise.resolve(cameraSettings),
+        });
       }
       if (url === '/api/settings/tools' && options.method === 'PUT') {
         const payload = JSON.parse(options.body);
@@ -331,6 +389,7 @@ function createRuntime({
       S: S,
       el: el,
       FILAMENT_LOADING_RETRY_MS: FILAMENT_LOADING_RETRY_MS,
+      CAMERA_SETTINGS_SAVE_TIMEOUT_MS: CAMERA_SETTINGS_SAVE_TIMEOUT_MS,
       TOOL_SETTINGS_SAVE_TIMEOUT_MS: TOOL_SETTINGS_SAVE_TIMEOUT_MS,
       applyCameraStatus: applyCameraStatus,
       applyToolSettingsToState: applyToolSettingsToState,
@@ -340,10 +399,12 @@ function createRuntime({
       normalizeToolSlots: normalizeToolSlots,
       normalizeToolSettings: normalizeToolSettings,
       normalizeToolSettingsView: normalizeToolSettingsView,
+      loadCameraQualitySettings: loadCameraQualitySettings,
       openToolEditor: openToolEditor,
       render: render,
       renderFilamentSuggestions: renderFilamentSuggestions,
       sameJobKey: sameJobKey,
+      saveCameraQuality: saveCameraQuality,
       saveToolSettings: saveToolSettings,
       searchFilamentsNow: searchFilamentsNow,
       selectFilamentSuggestion: selectFilamentSuggestion,
@@ -409,6 +470,204 @@ test('dashboard controls offer corresponding source without adding a passive ove
   assert.match(html, /Source &amp; AGPL license/);
   assert.match(html, /Tools &amp; filament/);
   assert.match(html, /OpenPrintTag Material Database[\s\S]+are searched on this server[\s\S]+MIT License/);
+});
+
+test('enhanced camera is an accessible global server setting with an explicit reconnect warning', () => {
+  const runtime = createRuntime({ height: 1080 });
+  const toggle = runtime.elements.get('camera-quality-toggle');
+  const announcement = runtime.elements.get('camera-quality-announcement');
+
+  assert.match(
+    html,
+    /id="camera-retry"[\s\S]+id="camera-quality-toggle"[\s\S]+id="room-toggle"/,
+  );
+  assert.equal(toggle.getAttribute('role'), 'switch');
+  assert.equal(toggle.getAttribute('aria-checked'), 'false');
+  assert.equal(toggle.getAttribute('aria-labelledby'), 'camera-quality-label camera-quality-value');
+  assert.equal(toggle.getAttribute('aria-describedby'), 'camera-quality-status');
+  assert.equal(toggle.disabled, true);
+  assert.equal(announcement.getAttribute('role'), 'status');
+  assert.equal(announcement.getAttribute('aria-live'), 'polite');
+  assert.match(html, /Enhanced camera/);
+  assert.match(html, /Affects all viewers and briefly reconnects\./);
+  assert.match(
+    html,
+    /#controls-handle, #controls-panel, \.control-action, #room-toggle, #camera-quality-toggle\s*\{[\s\S]*?color: #fff;/,
+  );
+});
+
+test('camera quality stays disabled until a valid ETag-backed setting loads', async () => {
+  const runtime = createRuntime({
+    height: 1080,
+    cameraSettings: { profile: 'enhanced-1440p' },
+    cameraSettingsRevision: '"camera-profile-a"',
+  });
+  const toggle = runtime.elements.get('camera-quality-toggle');
+
+  assert.equal(toggle.disabled, true);
+  await flushPromises();
+  await flushPromises();
+
+  assert.equal(toggle.disabled, false);
+  assert.equal(toggle.getAttribute('aria-checked'), 'true');
+  assert.equal(runtime.elements.get('camera-quality-value').textContent, 'Enhanced · Lanczos');
+  assert.match(runtime.elements.get('camera-quality-status').textContent, /Affects all viewers/);
+  assert.match(runtime.elements.get('camera-quality-status').textContent, /2560px/);
+  assert.equal(runtime.fetchCalls.filter(
+    (call) => call.url === '/api/settings/camera' && !call.options.method,
+  ).length, 1);
+  assert.equal([...runtime.storage.keys()].some((key) => /camera.*quality|quality.*camera/i.test(key)), false);
+});
+
+test('camera quality toggle saves JSON with If-Match without opening another camera reader', async () => {
+  const runtime = createRuntime({
+    height: 1080,
+    cameraSettings: { profile: 'native' },
+    cameraSettingsRevision: '"camera-profile-native"',
+    cameraSavedRevision: '"camera-profile-enhanced"',
+  });
+  await flushPromises();
+  await flushPromises();
+  const toggle = runtime.elements.get('camera-quality-toggle');
+  const originalSrc = runtime.elements.get('camera-feed').getAttribute('src');
+
+  toggle.dispatch('click');
+  const saveCall = runtime.fetchCalls.find(
+    (call) => call.url === '/api/settings/camera' && call.options.method === 'PUT',
+  );
+  assert.deepEqual(JSON.parse(saveCall.options.body), { profile: 'enhanced-1440p' });
+  assert.equal(saveCall.options.headers['Content-Type'], 'application/json');
+  assert.equal(saveCall.options.headers['If-Match'], '"camera-profile-native"');
+  assert.equal(saveCall.options.credentials, 'same-origin');
+  assert.equal(saveCall.options.mode, 'same-origin');
+  assert.equal(toggle.disabled, true);
+  assert.equal(toggle.getAttribute('aria-busy'), 'true');
+  assert.match(runtime.elements.get('camera-quality-status').textContent, /Saving Enhanced · Lanczos/);
+  assert.match(runtime.elements.get('camera-quality-announcement').textContent, /all viewers/);
+
+  await flushPromises();
+  await flushPromises();
+  assert.equal(toggle.disabled, false);
+  assert.equal(toggle.getAttribute('aria-busy'), 'false');
+  assert.equal(toggle.getAttribute('aria-checked'), 'true');
+  assert.equal(runtime.elements.get('camera-quality-value').textContent, 'Enhanced · Lanczos');
+  assert.match(runtime.elements.get('camera-quality-status').textContent, /saved for all viewers/i);
+  assert.equal(runtime.elements.get('camera-feed').getAttribute('src'), originalSrc);
+  assert.equal(runtime.imageRequests.length, 1);
+});
+
+test('camera quality conflicts and save failures retain the previous profile', async () => {
+  const conflict = createRuntime({
+    height: 1080,
+    cameraSettings: { profile: 'native' },
+    cameraSaveConflict: true,
+  });
+  await flushPromises();
+  await flushPromises();
+  conflict.elements.get('camera-quality-toggle').dispatch('click');
+  await flushPromises();
+  await flushPromises();
+
+  assert.equal(conflict.elements.get('camera-quality-value').textContent, 'Native');
+  assert.equal(conflict.elements.get('camera-quality-toggle').getAttribute('aria-checked'), 'false');
+  assert.equal(conflict.elements.get('camera-quality-toggle').disabled, true);
+  assert.match(conflict.elements.get('camera-quality-status').textContent, /changed in another dashboard/i);
+  assert.match(conflict.elements.get('camera-quality-announcement').textContent, /reload before saving again/i);
+  assert.equal(conflict.imageRequests.length, 1);
+  conflict.api.applyCameraStatus({
+    enabled: true,
+    running: true,
+    online: true,
+    profile: 'enhanced-1440p',
+    outputWidth: 2560,
+  });
+  assert.equal(conflict.elements.get('camera-quality-value').textContent, 'Enhanced · Lanczos');
+  assert.equal(conflict.elements.get('camera-quality-toggle').getAttribute('aria-checked'), 'true');
+  assert.equal(conflict.elements.get('camera-quality-toggle').disabled, true);
+  assert.equal(conflict.elements.get('camera-quality-toggle').getAttribute('aria-invalid'), 'true');
+  assert.match(conflict.elements.get('camera-quality-status').textContent, /current relay status is shown/i);
+  assert.match(conflict.elements.get('camera-quality-status').textContent, /2560px/);
+
+  const failure = createRuntime({
+    height: 1080,
+    cameraSettings: { profile: 'native' },
+    cameraSaveFailure: true,
+  });
+  await flushPromises();
+  await flushPromises();
+  failure.elements.get('camera-quality-toggle').dispatch('click');
+  await flushPromises();
+  await flushPromises();
+
+  assert.equal(failure.elements.get('camera-quality-value').textContent, 'Native');
+  assert.equal(failure.elements.get('camera-quality-toggle').getAttribute('aria-checked'), 'false');
+  assert.equal(failure.elements.get('camera-quality-toggle').disabled, false);
+  assert.match(failure.elements.get('camera-quality-status').textContent, /could not be saved/i);
+  failure.api.applyCameraStatus({
+    enabled: true,
+    running: true,
+    online: true,
+    profile: 'native',
+    outputWidth: 1920,
+  });
+  assert.equal(failure.elements.get('camera-quality-toggle').getAttribute('aria-invalid'), 'true');
+  assert.match(failure.elements.get('camera-quality-status').textContent, /could not be saved/i);
+  assert.match(failure.elements.get('camera-quality-status').textContent, /current relay status is shown/i);
+  assert.match(failure.elements.get('camera-quality-status').textContent, /1920px/);
+  assert.equal(failure.imageRequests.length, 1);
+});
+
+test('malformed camera setting responses stay fail-closed and cannot issue a PUT', async () => {
+  const runtime = createRuntime({
+    height: 1080,
+    cameraSettings: { profile: 'native', unexpected: true },
+  });
+  await flushPromises();
+  await flushPromises();
+
+  const toggle = runtime.elements.get('camera-quality-toggle');
+  assert.equal(toggle.disabled, true);
+  assert.equal(toggle.getAttribute('aria-invalid'), 'true');
+  assert.match(runtime.elements.get('camera-quality-status').textContent, /control remains disabled/i);
+  toggle.dispatch('click');
+  assert.equal(runtime.fetchCalls.filter(
+    (call) => call.url === '/api/settings/camera' && call.options.method === 'PUT',
+  ).length, 0);
+});
+
+test('authoritative camera profile status updates the display without replacing MJPEG', async () => {
+  const runtime = createRuntime({
+    height: 1080,
+    cameraSettings: { profile: 'native' },
+  });
+  await flushPromises();
+  await flushPromises();
+  const originalSrc = runtime.elements.get('camera-feed').getAttribute('src');
+
+  runtime.api.applyCameraStatus({
+    enabled: true,
+    running: true,
+    online: true,
+    profile: 'enhanced-1440p',
+    outputWidth: 2560,
+  });
+  assert.equal(runtime.elements.get('camera-quality-value').textContent, 'Enhanced · Lanczos');
+  assert.equal(runtime.elements.get('camera-quality-toggle').getAttribute('aria-checked'), 'true');
+  assert.match(runtime.elements.get('camera-quality-status').textContent, /2560px/);
+  assert.equal(runtime.elements.get('camera-feed').getAttribute('src'), originalSrc);
+  assert.equal(runtime.imageRequests.length, 1);
+
+  runtime.api.applyCameraStatus({
+    enabled: true,
+    running: true,
+    online: true,
+    profile: 'native',
+    outputWidth: 1920,
+  });
+  assert.equal(runtime.elements.get('camera-quality-value').textContent, 'Native');
+  assert.match(runtime.elements.get('camera-quality-status').textContent, /1920px/);
+  assert.equal(runtime.elements.get('camera-feed').getAttribute('src'), originalSrc);
+  assert.equal(runtime.imageRequests.length, 1);
 });
 
 test('clicking the camera dismisses the dashboard and tool editor', async () => {

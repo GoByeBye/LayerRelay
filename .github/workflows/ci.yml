@@ -192,6 +192,17 @@ jobs:
           test "$(docker image inspect layer-relay:local --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$GITHUB_SHA"
           test "$(docker image inspect layer-relay:local --format '{{ index .Config.Labels "org.opencontainers.image.source" }}')" = "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/$GITHUB_SHA"
 
+      - name: Exercise enhanced camera filter in bundled FFmpeg
+        run: >-
+          docker run --rm
+          --entrypoint ffmpeg
+          layer-relay:local
+          -hide_banner -loglevel error
+          -f lavfi -i testsrc2=size=1920x1080:rate=1
+          -frames:v 1
+          -vf "fps=24,scale=2560:-2:flags=lanczos,unsharp=5:5:0.35:5:5:0"
+          -f null -
+
       - name: Prepare a locked-down config owned by a different UID
         run: |
           printf '%s\n' '{"printerHost":"127.0.0.1","username":"ci","password":"ci-password","cameraStreamEnabled":false}' > config.json

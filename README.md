@@ -16,7 +16,8 @@ camera, and G-code behavior still needs community testing.
 
 The printer integrations are display-only: they read printer APIs with `GET`
 requests and have no pause, stop, movement, temperature, or upload controls.
-The local dashboard can write only its own non-secret tool inventory.
+The local dashboard can write only its own non-secret tool inventory and camera
+presentation profile.
 That describes this project's behavior, not the authority of a Prusa web-client
 refresh token, which may carry broader account permissions; see the
 [Connect setup guide](docs/prusa-connect.md).
@@ -40,6 +41,7 @@ refresh token, which may carry broader account permissions; see the
 ## What it shows
 
 - The printer camera, relayed from RTSP through one shared local MJPEG fanout
+- Optional persisted Enhanced camera scaling, applied once for all viewers
 - Print name and thumbnail, lifecycle state, progress, remaining time, and finish clock
 - Nozzle, bed, chamber, and room temperatures
 - Active tool, configured spool name/colour, and the next tool change
@@ -95,6 +97,12 @@ Open <http://localhost:8787/> after startup. For a container install, use the
 [Docker guide](docs/docker.md); Compose publishes the service on host loopback
 by default.
 
+Move the pointer to reveal **Dashboard**, then enable **Enhanced camera** to
+switch the shared relay from its configured native width to at least 2560 px
+using Lanczos scaling and light sharpening. The change briefly restarts the
+single FFmpeg worker without opening a second RTSP reader, applies to every
+browser and OBS viewer, and persists under `DATA_DIR`.
+
 Move the pointer to reveal **Dashboard**, then choose **Tools & filament**.
 Tool count, loaded/empty state, and material follow Prusa Connect automatically
 when that inventory is available. Count, presence, name, and colour can be
@@ -121,7 +129,7 @@ The main settings are:
 | `pollIntervalMs` | Local PrusaLink cadence. `2000` is the safe default for the printer's Buddy board. |
 | `sourceCodeUrl` | Corresponding-source URL offered in the dashboard and HTTP `Link` header. Modified deployments must point it at their exact source. |
 | `toolCount` / `toolSlots` | Optional inventory overrides. `toolCount: null` and omitted slot fields follow Prusa Connect; explicit dashboard values persist in `DATA_DIR/tool-settings.json`. |
-| `toolSettingsAllowedOrigins` | Exact extra browser origins allowed to save tool settings through a named host or authenticated reverse proxy. Loopback and literal IP origins need no entry. |
+| `toolSettingsAllowedOrigins` | Exact extra browser origins allowed to save dashboard settings through a named host or authenticated reverse proxy. Loopback and literal IP origins need no entry. |
 | `localBgcodeDirs` | Folders searched for a matching `.bgcode` before downloading it from the printer. |
 | `printNameOverrides` | Optional exact `jobKey` to display-name map for slicer files that expose only placeholders such as `Merged`. |
 | `connect*` | Recommended but experimental Prusa Connect UUID, rotating refresh token, and rate-limited poll cadence. Complete credentials enable it by default; review the service-terms boundary in the [setup guide](docs/prusa-connect.md). |
@@ -147,6 +155,11 @@ For a new integrated dashboard, add one **Browser** source with URL
 browser when scene becomes active**. The server opens one upstream RTSP reader
 and fans its MJPEG output out to every connected browser, so OBS refreshes or
 multiple local previews do not create extra camera sessions.
+
+Enhanced camera is a global relay setting, not an OBS-only effect. With the
+default 1920-wide 16:9 relay, Enhanced output is **2560 × 1440**. Match the
+Browser Source to that size when the OBS canvas/output is also 1440p; a
+1920 × 1080 source will downscale the enhanced stream again.
 
 ### Migrating an active scene safely
 
@@ -229,6 +242,7 @@ not an extrusion timeline.
 | `bgcode.js` | `.bgcode` container and G-code decoder |
 | `toolswaps.js` | Tool/swap/layer/waste timeline builder |
 | `tool-settings.js` | Validated, immediately applied tool inventory persisted under `DATA_DIR` |
+| `camera-settings.js` | Validated global camera presentation profile persisted under `DATA_DIR` |
 | `openprinttag-index.js` | Startup-refreshed local suggestion index derived from the public OpenPrintTag material and brand snapshots |
 | `public/overlay.html` | Self-contained overlay UI; browser requests remain same-origin |
 | `tools/` | Guarded restart, camera snapshot, and Connect token-display helpers |
@@ -238,6 +252,8 @@ HTTP endpoints:
 - `GET /healthz` — process liveness only; printer and camera outages do not fail it
 - `GET /source` — redirects to the configured corresponding source for the running deployment
 - `GET /api/state` — merged live state, connectivity, tool inventory, and completed job
+- `GET /api/settings/camera` — non-secret global camera profile with an `ETag` revision
+- `PUT /api/settings/camera` — same-origin profile update; send the last GET's `ETag` as `If-Match`
 - `GET /api/settings/tools` — non-secret override, detected, and effective tool inventory layers, with an `ETag` revision
 - `PUT /api/settings/tools` — same-origin JSON update for only nullable count and per-field overrides; send the last GET's `ETag` as `If-Match`, and reload after a `409` conflict
 - `GET /api/filaments?q=<text>` — synchronous local OpenPrintTag suggestions; custom values never depend on them
@@ -262,9 +278,10 @@ sensitive.
 - A disconnected overlay keeps the last-known frame visible and freezes countdowns.
 - Analysis and thumbnail failures back off; a late analysis from an old job is not
   allowed to replace the current job.
-- Camera viewers share one FFmpeg/RTSP upstream. The relay starts on demand, drops
-  frames for slow clients instead of buffering without bound, and retries a lost
-  camera connection with backoff.
+- Camera viewers share one FFmpeg/RTSP upstream. The relay starts on demand,
+  hot-switches the global native/enhanced profile only after the prior worker
+  exits, drops frames for slow clients instead of buffering without bound, and
+  retries a lost camera connection with backoff.
 - Camera JPEGs remain in RAM only: FFmpeg writes to stdout, the relay keeps one latest
   frame, browsers receive `no-store`, and no recording or frame cache is created.
 - Per-print analysis JSON is pruned by count and total size.

@@ -74,7 +74,7 @@ modified container deployment.
 | `pollIntervalMs` | integer at least 250, `2000` | Non-secret | `2000` | Do not aggressively lower this; the printer board is resource constrained. |
 | `sourceCodeUrl` | HTTP(S) URL, project repository | Public | `"https://github.com/GoByeBye/LayerRelay"` | Dashboard source/license link and HTTP `Link` target. Modified deployments must use their exact source. |
 | `toolCount` | `null` or integer 1–32, `null` | Non-secret | `null` | `null` follows the tool inventory inferred from Prusa Connect; an integer is a manual count override. |
-| `toolSettingsAllowedOrigins` | array of up to 16 exact HTTP(S) origins, `[]` | Non-secret | `["https://relay.example"]` | Extra named browser origins allowed to save tool settings. Loopback and literal IP origins are accepted automatically. Add only origins protected by your deployment boundary. |
+| `toolSettingsAllowedOrigins` | array of up to 16 exact HTTP(S) origins, `[]` | Non-secret | `["https://relay.example"]` | Extra named browser origins allowed to save dashboard settings. Loopback and literal IP origins are accepted automatically. Add only origins protected by your deployment boundary. |
 | `toolSlots` | object, `{}` | Slot names may identify private inventory | `{"1":{"loaded":true,"name":"Example filament","color":"#ff8a3d"}}` | Slot keys are integers from 1 through 32; nested fields are below. |
 | `printNameOverrides` | object of string values, `{}` | Identifying print names | `{"example.bgcode":"Demo vase"}` | Exact job-key to display-name replacements; values are at most 200 characters. |
 | `localBgcodeDirs` | array of non-empty strings, `[]` | Local paths may identify a machine | `["/srv/gcode"]` | Folders searched before downloading a job from the printer; mount container paths explicitly. |
@@ -92,10 +92,11 @@ independent override: when `loaded`, `name`, or `color` is omitted, that field
 continues to follow Connect (or remains unknown when Connect has no value).
 Setting a name or colour does not imply that the slot is loaded.
 
-### Dashboard tool editor
+### Dashboard settings
 
-The browser dashboard edits only the `toolCount` and `toolSlots` override layer;
-it never reads, returns, or rewrites the credential-bearing configuration file.
+The browser dashboard edits only the non-secret camera presentation profile and
+the `toolCount` and `toolSlots` override layer; it never reads, returns, or
+rewrites the credential-bearing configuration file.
 The settings view shows detected Connect values, saved overrides, and the
 server-resolved effective inventory separately. A successful save is validated,
 applied to `/api/state` immediately, and written atomically to
@@ -155,6 +156,19 @@ linked product photos, package data, properties, or purchase URLs. See
 | `cameraStreamRestartBaseMs` | integer 250–30000, `1000` | Non-secret | `1000` | Initial retry backoff. |
 | `cameraStreamRestartMaxMs` | integer 1000–120000, `15000` | Non-secret | `15000` | Maximum retry backoff. |
 | `cameraStreamMaxFrameBytes` | integer 1048576–67108864, `16777216` | Non-secret | `16777216` | Safety cap for one JPEG frame. |
+
+The dashboard's global camera profile is separate from the deployment
+configuration. **Native** uses `cameraStreamWidth` with FFmpeg's low-cost
+bilinear scaler. **Enhanced camera** selects at least 2560 px output width,
+preserves the source aspect ratio, and applies Lanczos scaling plus light luma
+sharpening. A configured width above 2560 is never reduced.
+
+The selected profile is written atomically to
+`DATA_DIR/camera-settings.json`, applies to every connected browser, and
+survives restarts. Changing it briefly stops the current FFmpeg worker; the
+existing MJPEG subscribers remain connected and a replacement worker starts
+only after the old process exits, preserving the single RTSP-reader boundary.
+This is spatial interpolation and sharpening, not AI super-resolution.
 
 ## Cloud integrations
 

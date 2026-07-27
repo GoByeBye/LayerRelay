@@ -112,8 +112,20 @@ try {
   if (state.toolCount !== 1 || state.toolCountSource !== 'fallback' || state.toolSlots?.length !== 1 ||
       state.toolSlots[0].loaded !== null || state.toolSlots[0].material !== null ||
       state.toolSettings?.toolCount !== null || state.toolSettings?.detected?.status !== 'unavailable' ||
-      state.camera?.enabled !== false) {
+      state.camera?.enabled !== false || state.camera?.profile !== 'native' ||
+      state.camera?.outputWidth !== 1920) {
     throw new Error('state endpoint returned unexpected tool or camera status');
+  }
+
+  const initialCameraResponse = await fetch(`${baseUrl}/api/settings/camera`);
+  const initialCameraText = await initialCameraResponse.text();
+  const initialCamera = JSON.parse(initialCameraText);
+  const cameraClientARevision = initialCameraResponse.headers.get('etag');
+  const cameraClientBRevision = initialCameraResponse.headers.get('etag');
+  if (!initialCameraResponse.ok || initialCamera.profile !== 'native' ||
+      !cameraClientARevision || !cameraClientBRevision ||
+      /password|refreshToken|cameraRtspUrl|configPath/i.test(initialCameraText)) {
+    throw new Error('camera settings endpoint exposed an unexpected payload');
   }
 
   const initialToolsResponse = await fetch(`${baseUrl}/api/settings/tools`);
@@ -134,6 +146,15 @@ try {
     body: JSON.stringify({ toolCount: 2, toolSlots: {} }),
   });
   if (crossOriginWrite.status !== 403) throw new Error('cross-origin tool settings write was not rejected');
+
+  const crossOriginCameraWrite = await fetch(`${baseUrl}/api/settings/camera`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Origin: 'https://attacker.example' },
+    body: JSON.stringify({ profile: 'enhanced-1440p' }),
+  });
+  if (crossOriginCameraWrite.status !== 403) {
+    throw new Error('cross-origin camera settings write was not rejected');
+  }
 
   const reboundWrite = await fetch(`${baseUrl}/api/settings/tools`, {
     method: 'PUT',
@@ -162,6 +183,41 @@ try {
   const clientAUpdatedRevision = allowedProxyWrite.headers.get('etag');
   if (!clientAUpdatedRevision || clientAUpdatedRevision === clientARevision) {
     throw new Error('successful tool settings write did not advance its revision');
+  }
+
+  const enhancedCameraResponse = await fetch(`${baseUrl}/api/settings/camera`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      Origin: baseUrl,
+      'If-Match': cameraClientARevision,
+    },
+    body: JSON.stringify({ profile: 'enhanced-1440p' }),
+  });
+  const enhancedCamera = await enhancedCameraResponse.json();
+  const enhancedCameraRevision = enhancedCameraResponse.headers.get('etag');
+  if (!enhancedCameraResponse.ok || enhancedCamera.profile !== 'enhanced-1440p' ||
+      !enhancedCameraRevision || enhancedCameraRevision === cameraClientARevision) {
+    throw new Error('valid enhanced camera settings were not saved');
+  }
+  const enhancedState = await (await fetch(`${baseUrl}/api/state`)).json();
+  if (enhancedState.camera?.profile !== 'enhanced-1440p' ||
+      enhancedState.camera?.outputWidth !== 2560) {
+    throw new Error('enhanced camera settings did not hot-update state');
+  }
+
+  const staleCameraWrite = await fetch(`${baseUrl}/api/settings/camera`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      Origin: baseUrl,
+      'If-Match': cameraClientBRevision,
+    },
+    body: JSON.stringify({ profile: 'native' }),
+  });
+  const staleCameraBody = await staleCameraWrite.json();
+  if (staleCameraWrite.status !== 409 || !/changed|reload/i.test(staleCameraBody.error || '')) {
+    throw new Error('stale camera settings write was not rejected with a clear conflict');
   }
 
   const staleClientWrite = await fetch(`${baseUrl}/api/settings/tools`, {
@@ -217,16 +273,24 @@ try {
   if (!fs.existsSync(path.join(tempDir, 'data', 'tool-settings.json'))) {
     throw new Error('tool settings were not persisted under DATA_DIR');
   }
+  if (!fs.existsSync(path.join(tempDir, 'data', 'camera-settings.json'))) {
+    throw new Error('camera settings were not persisted under DATA_DIR');
+  }
 
   await stopChild();
   startChild();
   await waitForHealth(baseUrl);
+  const restartedCameraResponse = await fetch(`${baseUrl}/api/settings/camera`);
+  const restartedCamera = await restartedCameraResponse.json();
   const restartedToolsResponse = await fetch(`${baseUrl}/api/settings/tools`);
   const restartedTools = await restartedToolsResponse.json();
   const restartedState = await (await fetch(`${baseUrl}/api/state`)).json();
-  if (restartedTools.toolCount !== 2 || restartedTools.toolSlots?.['2']?.name !== 'Prusament PETG Galaxy Black' ||
+  if (restartedCamera.profile !== 'enhanced-1440p' ||
+      restartedState.camera?.profile !== 'enhanced-1440p' ||
+      restartedState.camera?.outputWidth !== 2560 ||
+      restartedTools.toolCount !== 2 || restartedTools.toolSlots?.['2']?.name !== 'Prusament PETG Galaxy Black' ||
       restartedState.toolCount !== 2 || restartedState.toolSlots?.[1]?.color !== '#112233') {
-    throw new Error('tool settings did not survive a server restart');
+    throw new Error('dashboard settings did not survive a server restart');
   }
 
   const autoResponse = await fetch(`${baseUrl}/api/settings/tools`, {
@@ -260,7 +324,7 @@ try {
     throw new Error('state API unexpectedly exposed a mutation or authentication surface');
   }
 
-  console.log(`Smoke test passed on ${process.platform}: health, source offer, state, scoped writes, and restart persistence.`);
+  console.log(`Smoke test passed on ${process.platform}: health, source offer, state, camera/tool writes, and restart persistence.`);
 } catch (error) {
   console.error(`Smoke test failed: ${error.message}`);
   process.exitCode = 1;

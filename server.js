@@ -31,6 +31,10 @@ const {
 } = require('./job-lifecycle.js');
 const { createLatestWork } = require('./latest-work.js');
 const { CameraStream } = require('./camera-stream.js');
+const {
+  createCameraSettingsStore,
+  normalizeCameraSettings,
+} = require('./camera-settings.js');
 const { pruneAnalysisCache } = require('./cache-retention.js');
 const { preferredPrintName } = require('./print-name.js');
 const { sampleHealth, selectTelemetrySource } = require('./telemetry-freshness.js');
@@ -60,12 +64,20 @@ const {
 const runtimeConfig = loadRuntimeConfig({ rootDir: __dirname });
 const cfg = runtimeConfig.config;
 const sourceCodeUrl = new URL(cfg.sourceCodeUrl).href;
-const cameraStream = new CameraStream(cfg);
 const CACHE_DIR = runtimeConfig.dataDir;
 fs.mkdirSync(CACHE_DIR, { recursive: true, mode: 0o700 });
 if (process.platform !== 'win32') {
   try { fs.chmodSync(CACHE_DIR, 0o700); } catch { /* Best effort for bind mounts and network filesystems. */ }
 }
+const cameraSettingsStore = createCameraSettingsStore({
+  dataFile: path.join(CACHE_DIR, 'camera-settings.json'),
+  defaults: { profile: 'native' },
+  logger: console,
+});
+const cameraStream = new CameraStream({
+  ...cfg,
+  cameraStreamProfile: cameraSettingsStore.get().profile,
+});
 const toolSettingsStore = createToolSettingsStore({
   dataFile: path.join(CACHE_DIR, 'tool-settings.json'),
   defaults: { toolCount: cfg.toolCount, toolSlots: cfg.toolSlots },
@@ -1021,7 +1033,12 @@ app.get('/api/settings/tools', (_req, res) => {
   res.json(currentToolSettingsView(merged.out && merged.out.toolLabel));
 });
 
-const toolSettingsJson = express.json({ limit: '16kb', strict: true });
+app.get('/api/settings/camera', (_req, res) => {
+  res.set('ETag', cameraSettingsStore.etag());
+  res.json(cameraSettingsStore.get());
+});
+
+const settingsJson = express.json({ limit: '16kb', strict: true });
 function isLoopbackHostname(value) {
   let hostname = String(value || '').trim().toLowerCase().replace(/\.$/, '');
   if (hostname.startsWith('[') && hostname.endsWith(']')) hostname = hostname.slice(1, -1);
@@ -1033,8 +1050,8 @@ function isLoopbackHostname(value) {
   return false;
 }
 
-const toolSettingsAllowedOrigins = new Set(cfg.toolSettingsAllowedOrigins || []);
-const toolSettingsAllowedHosts = new Set([...toolSettingsAllowedOrigins]
+const settingsAllowedOrigins = new Set(cfg.toolSettingsAllowedOrigins || []);
+const settingsAllowedHosts = new Set([...settingsAllowedOrigins]
   .map((origin) => new URL(origin).host.toLowerCase()));
 function sameOriginSettingsWrite(req, res, next) {
   // Origin/Fetch-Metadata checks alone do not stop DNS rebinding because a hostile
@@ -1046,7 +1063,7 @@ function sameOriginSettingsWrite(req, res, next) {
     requestHostname.startsWith('[') && requestHostname.endsWith(']')
       ? requestHostname.slice(1, -1) : requestHostname,
   ) !== 0;
-  if (!addressHost && !toolSettingsAllowedHosts.has(requestHost)) {
+  if (!addressHost && !settingsAllowedHosts.has(requestHost)) {
     return res.status(403).json({ error: 'settings host rejected' });
   }
   const fetchSite = String(req.get('sec-fetch-site') || '').trim().toLowerCase();
@@ -1058,7 +1075,7 @@ function sameOriginSettingsWrite(req, res, next) {
     try {
       const parsedOrigin = new URL(origin);
       if (parsedOrigin.host.toLowerCase() !== requestHost ||
-          (!addressHost && !toolSettingsAllowedOrigins.has(parsedOrigin.origin))) {
+          (!addressHost && !settingsAllowedOrigins.has(parsedOrigin.origin))) {
         return res.status(403).json({ error: 'cross-origin settings write rejected' });
       }
     } catch {
@@ -1068,8 +1085,37 @@ function sameOriginSettingsWrite(req, res, next) {
   if (!req.is('application/json')) {
     return res.status(415).json({ error: 'content type must be application/json' });
   }
-  return toolSettingsJson(req, res, next);
+  return settingsJson(req, res, next);
 }
+
+app.put('/api/settings/camera', sameOriginSettingsWrite, (req, res) => {
+  let normalized;
+  try {
+    normalized = normalizeCameraSettings(req.body);
+  } catch {
+    return res.status(400).json({ error: 'invalid camera settings' });
+  }
+  try {
+    const expectedEtag = req.get('if-match');
+    if (!expectedEtag) {
+      return res.status(409).json({
+        error: 'camera settings changed or were not loaded; reload settings before saving',
+      });
+    }
+    const saved = cameraSettingsStore.replace(normalized, expectedEtag);
+    cameraStream.setProfile(saved.profile);
+    res.set('ETag', cameraSettingsStore.etag());
+    return res.json(saved);
+  } catch (error) {
+    if (error && error.code === 'CAMERA_SETTINGS_CONFLICT') {
+      return res.status(409).json({
+        error: 'camera settings changed in another browser; reload settings before saving',
+      });
+    }
+    console.error(`[camera-settings] save failed: ${error && error.code ? error.code : 'write error'}`);
+    return res.status(503).json({ error: 'camera settings could not be saved' });
+  }
+});
 
 app.put('/api/settings/tools', sameOriginSettingsWrite, (req, res) => {
   let normalized;

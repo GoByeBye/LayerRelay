@@ -110,7 +110,7 @@ authenticated reverse proxy. The dashboard includes printer state and can expose
 the relayed camera image. A reverse proxy that serves LayerRelay from a named
 browser origin must also add that exact origin, such as
 `https://relay.example`, to `toolSettingsAllowedOrigins` in `config.json` before
-the tool editor can save. Literal LAN IP and loopback URLs need no allowlist
+the dashboard settings can save. Literal LAN IP and loopback URLs need no allowlist
 entry.
 
 ## Configuration and persistent state
@@ -128,7 +128,8 @@ installs rather than container path remapping.
 
 The named `overlay-data` volume is mounted at `/data`. It contains cached print
 analysis, last-known state and Connect tool inventory, dashboard tool overrides,
-the normalized OpenPrintTag suggestion index, and any rotated cloud refresh tokens.
+the global camera presentation profile, the normalized OpenPrintTag suggestion
+index, and any rotated cloud refresh tokens.
 `docker compose down` preserves it. Do not use `docker compose down -v`
 unless discarding that state and the persisted cloud tokens is intentional.
 For Prusa Connect, the rotated token in `/data/connect-token.json` takes

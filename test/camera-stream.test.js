@@ -109,6 +109,7 @@ function createHarness(config = {}, responseResults = []) {
 test('normalizes relay settings and builds a direct ffmpeg command', () => {
   const defaults = normalizeCameraOptions({ cameraRtspUrl: 'rtsp://camera/live' });
   assert.equal(defaults.fps, 24);
+  assert.equal(defaults.profile, 'native');
   assert.equal(defaults.maxFrameBytes, 16 * 1024 * 1024);
   const options = normalizeCameraOptions({
     cameraRtspUrl: ' rtsp://camera/live ',
@@ -119,6 +120,7 @@ test('normalizes relay settings and builds a direct ffmpeg command', () => {
     cameraStreamMaxFrameBytes: 128 * 1024 * 1024,
   });
   assert.equal(options.enabled, true);
+  assert.equal(options.profile, 'native');
   assert.equal(options.fps, 30);
   assert.equal(options.width, 1918);
   assert.equal(options.jpegQuality, 2);
@@ -131,9 +133,27 @@ test('normalizes relay settings and builds a direct ffmpeg command', () => {
   assert.equal(args[args.indexOf('-rtsp_transport') + 1], 'tcp');
   assert.equal(args[args.indexOf('-timeout') + 1], String(options.ioTimeoutMs * 1000));
   assert.equal(args.includes('-rw_timeout'), false);
-  assert.match(args[args.indexOf('-vf') + 1], /fps=30,scale=1918:-2/);
+  assert.equal(args[args.indexOf('-vf') + 1], 'fps=30,scale=1918:-2:flags=fast_bilinear');
   assert.equal(args[args.indexOf('-filter_threads') + 1], '4');
   assert.equal(args.filter((arg) => arg === '-threads').length, 2);
+
+  const enhanced = normalizeCameraOptions({
+    cameraRtspUrl: 'rtsp://camera/live',
+    cameraStreamProfile: 'enhanced-1440p',
+    cameraStreamWidth: 1920,
+  });
+  assert.equal(enhanced.profile, 'enhanced-1440p');
+  assert.equal(enhanced.width, 2560);
+  const enhancedArgs = buildFfmpegArgs(enhanced);
+  assert.equal(
+    enhancedArgs[enhancedArgs.indexOf('-vf') + 1],
+    'fps=24,scale=2560:-2:flags=lanczos,unsharp=5:5:0.35:5:5:0',
+  );
+  assert.equal(normalizeCameraOptions({
+    cameraRtspUrl: 'rtsp://camera/live',
+    cameraStreamProfile: 'enhanced-1440p',
+    cameraStreamWidth: 3840,
+  }).width, 3840);
 });
 
 test('fans split JPEG frames from one process out to every subscriber', () => {
@@ -164,6 +184,7 @@ test('fans split JPEG frames from one process out to every subscriber', () => {
     frames: 1,
     targetFps: 24,
     measuredFps: null,
+    profile: 'native',
     outputWidth: 1920,
     jpegQuality: 5,
     threads: 4,
@@ -174,6 +195,97 @@ test('fans split JPEG frames from one process out to every subscriber', () => {
     restartInMs: null,
     error: null,
   });
+  harness.relay.close();
+});
+
+test('validates profiles exactly and ignores an idempotent profile set', () => {
+  assert.throws(
+    () => normalizeCameraOptions({
+      cameraRtspUrl: 'rtsp://camera/live',
+      cameraStreamProfile: 'Enhanced-1440p',
+    }),
+    /cameraStreamProfile/,
+  );
+
+  const harness = createHarness();
+  harness.subscribe();
+  assert.equal(harness.relay.setProfile('native'), false);
+  assert.equal(harness.calls.length, 1);
+  assert.deepEqual(harness.children[0].kills, []);
+  assert.throws(() => harness.relay.setProfile('enhanced'), /cameraStreamProfile/);
+  assert.equal(harness.relay.getStatus().profile, 'native');
+  harness.relay.close();
+});
+
+test('reconfigures a live relay without overlapping readers or leaking an old frame', () => {
+  const harness = createHarness();
+  const client = harness.subscribe();
+  const oldChild = harness.children[0];
+  const oldJpeg = Buffer.from([0xff, 0xd8, 0x11, 0xff, 0xd9]);
+  oldChild.stdout.emit('data', oldJpeg);
+  const writesBeforeReconfigure = client.res.writes.length;
+  assert.ok(harness.relay.latestFrame);
+
+  assert.equal(harness.relay.setProfile('enhanced-1440p'), true);
+  assert.deepEqual(oldChild.kills, ['SIGTERM']);
+  assert.equal(harness.calls.length, 1);
+  assert.equal(client.res.writableEnded, false);
+  assert.equal(harness.relay.latestFrame, null);
+  assert.equal(harness.relay.getStatus().profile, 'enhanced-1440p');
+  assert.equal(harness.relay.getStatus().outputWidth, 2560);
+
+  const snapshotWhileStopping = new FakeResponse();
+  harness.relay.handleSnapshot(new EventEmitter(), snapshotWhileStopping);
+  assert.equal(snapshotWhileStopping.statusCode, 503);
+  oldChild.stdout.emit('data', Buffer.from([0xff, 0xd8, 0x22, 0xff, 0xd9]));
+  assert.equal(harness.relay.latestFrame, null);
+  assert.equal(client.res.writes.length, writesBeforeReconfigure);
+
+  oldChild.emit('close', 0, 'SIGTERM');
+  assert.equal(harness.calls.length, 2);
+  assert.equal(client.res.writableEnded, false);
+  const replacementFilter = harness.calls[1].args[harness.calls[1].args.indexOf('-vf') + 1];
+  assert.equal(
+    replacementFilter,
+    'fps=24,scale=2560:-2:flags=lanczos,unsharp=5:5:0.35:5:5:0',
+  );
+
+  const newJpeg = Buffer.from([0xff, 0xd8, 0x33, 0xff, 0xd9]);
+  harness.children[1].stdout.emit('data', newJpeg);
+  assert.deepEqual(harness.relay.latestFrame, newJpeg);
+  assert.ok(client.res.writes.length > writesBeforeReconfigure);
+  harness.relay.close();
+});
+
+test('cancels camera backoff and starts the selected profile immediately', () => {
+  const harness = createHarness();
+  harness.subscribe();
+  harness.children[0].emit('close', 1, null);
+  assert.equal(harness.calls.length, 1);
+  assert.equal(harness.relay.getStatus().state, 'reconnecting');
+
+  assert.equal(harness.relay.setProfile('enhanced-1440p'), true);
+  assert.equal(harness.calls.length, 2);
+  assert.equal(harness.relay.getStatus().restartInMs, null);
+  assert.equal(harness.calls[1].args[harness.calls[1].args.indexOf('-vf') + 1],
+    'fps=24,scale=2560:-2:flags=lanczos,unsharp=5:5:0.35:5:5:0');
+  harness.relay.close();
+});
+
+test('waits for close when a stopping reader cannot confirm SIGTERM', () => {
+  const harness = createHarness();
+  harness.subscribe();
+  const oldChild = harness.children[0];
+  oldChild.kill = function (signal) {
+    this.kills.push(signal);
+    return false;
+  };
+
+  harness.relay.setProfile('enhanced-1440p');
+  assert.deepEqual(oldChild.kills, ['SIGTERM']);
+  assert.equal(harness.calls.length, 1);
+  oldChild.emit('close', 0, null);
+  assert.equal(harness.calls.length, 2);
   harness.relay.close();
 });
 
