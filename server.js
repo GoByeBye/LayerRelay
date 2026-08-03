@@ -7,6 +7,7 @@ const path = require('path');
 const crypto = require('crypto');
 const net = require('node:net');
 const express = require('express');
+const { safeThumbnailContentType } = require('./thumbnail-content-type.js');
 const { loadRuntimeConfig } = require('./config.js');
 const { digestGet, digestGetJson } = require('./digest.js');
 const { analyzeBgcode, mapLive, materialFor, ANALYSIS_VERSION } = require('./toolswaps.js');
@@ -231,8 +232,8 @@ function restoreThumbnail() {
   try {
     const size = fs.statSync(file).size;
     if (size <= 0 || size > MAX_THUMB_BYTES) return;
-    const contentType = /^image\/[a-z0-9.+-]+$/i.test(meta.contentType || '')
-      ? meta.contentType : 'image/png';
+    const contentType = safeThumbnailContentType(meta.contentType);
+    if (!contentType) return;
     thumbCache = { key: jobKey, buf: fs.readFileSync(file), contentType, fileName: meta.fileName };
   } catch { /* Missing or partial cache: the next asset refresh repairs it. */ }
 }
@@ -727,7 +728,8 @@ async function refreshThumb(jobKey, source, options = {}) {
     if (options.signal?.aborted) return;
     if (r.status === 200) {
       const rawContentType = String(r.headers['content-type'] || '').split(';')[0].trim();
-      if (options.requireImage && !/^image\/[a-z0-9.+-]+$/i.test(rawContentType)) {
+      const safeContentType = safeThumbnailContentType(rawContentType);
+      if ((options.requireImage || rawContentType) && !safeContentType) {
         throw new Error(`unexpected preview content type ${rawContentType || 'missing'}`);
       }
       if (!Buffer.isBuffer(r.body) || r.body.length <= 0 || r.body.length > MAX_THUMB_BYTES) {
@@ -735,8 +737,7 @@ async function refreshThumb(jobKey, source, options = {}) {
       }
       if (sameJobKey(activeAnalysisJobKey, jobKey) ||
           (completedJob && sameJobKey(completedJob.jobKey, jobKey))) {
-        const contentType = /^image\/[a-z0-9.+-]+$/i.test(rawContentType)
-          ? rawContentType : 'image/png';
+        const contentType = safeContentType || 'image/png';
         publishThumbnail(jobKey, r.body, contentType);
       }
       thumbFailureKey = null;
