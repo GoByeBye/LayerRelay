@@ -43,6 +43,8 @@ still reveal deployment details.
 | `PRINTER_PASSWORD` | `password` | non-empty string, required | Secret | `replace-with-your-prusalink-password` | PrusaLink password. |
 | `CAMERA_RTSP_URL` | `cameraRtspUrl` | RTSP(S) URL, empty | Private; secret if credential-bearing | `rtsp://192.0.2.20/live` | Private camera source. Buddy3D uses an unencrypted, unauthenticated local feed without credentials in the URL. |
 | `CAMERA_STREAM_ENABLED` | `cameraStreamEnabled` | boolean, automatic | Non-secret | `false` | Camera override (`true`/`false`, `1`/`0`, `yes`/`no`). |
+| `NOZZLE_RTSP_URL` | `nozzleRtspUrl` | RTSP(S) URL, empty | Private; secret if credential-bearing | `rtsp://192.0.2.20:8554/nozzle` | Optional secondary nozzle camera source, relayed to `/api/nozzle.mjpeg`. |
+| `NOZZLE_STREAM_ENABLED` | `nozzleStreamEnabled` | boolean, automatic | Non-secret | `false` | Nozzle relay override (`true`/`false`, `1`/`0`, `yes`/`no`). |
 | `SOURCE_CODE_URL` | `sourceCodeUrl` | HTTP(S) URL, project repository | Public | `https://github.com/GoByeBye/LayerRelay` | Corresponding source offered to remote users. Modified deployments must use their exact source revision. |
 
 Every override also accepts a `LAYER_RELAY_` prefix, for example
@@ -155,6 +157,11 @@ linked product photos, package data, properties, or purchase URLs. See
 | `cameraStreamRestartBaseMs` | integer 250–30000, `1000` | Non-secret | `1000` | Initial retry backoff. |
 | `cameraStreamRestartMaxMs` | integer 1000–120000, `15000` | Non-secret | `15000` | Maximum retry backoff. |
 | `cameraStreamMaxFrameBytes` | integer 1048576–67108864, `16777216` | Non-secret | `16777216` | Safety cap for one JPEG frame. |
+| `nozzleRtspUrl` | empty or RTSP(S) URL, empty | Private; secret if credential-bearing | `""` | Optional secondary (nozzle) RTSP source. Same handling as `cameraRtspUrl`; served at `/api/nozzle.mjpeg` and `/api/nozzle.jpg`. |
+| `nozzleStreamEnabled` | boolean, automatic | Non-secret | `false` | A non-empty `nozzleRtspUrl` enables the nozzle relay when omitted; `false` disables it. |
+| `nozzleStreamFps` | integer 1–30, `15` | Non-secret | `15` | Nozzle MJPEG output frame rate. |
+| `nozzleStreamWidth` | integer 320–3840, `640` | Non-secret | `640` | Nozzle output width; aspect ratio is retained. |
+| `nozzleStreamJpegQuality` | integer 2–31, `6` | Non-secret | `6` | Nozzle FFmpeg JPEG quality scale; lower is higher quality. |
 
 ## Cloud integrations
 

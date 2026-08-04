@@ -1,0 +1,412 @@
+diff --git a/config.example.json b/config.example.json
+index 5b216eb..9e69af1 100644
+--- a/config.example.json
++++ b/config.example.json
+@@ -28,6 +28,11 @@
+   "cameraStreamRestartBaseMs": 1000,
+   "cameraStreamRestartMaxMs": 15000,
+   "cameraStreamMaxFrameBytes": 16777216,
++  "nozzleRtspUrl": "",
++  "nozzleStreamEnabled": false,
++  "nozzleStreamFps": 15,
++  "nozzleStreamWidth": 640,
++  "nozzleStreamJpegQuality": 6,
+   "useConnect": true,
+   "connectPrinterUuid": "",
+   "connectClientId": "",
+diff --git a/config.js b/config.js
+index 5773954..496452e 100644
+--- a/config.js
++++ b/config.js
+@@ -18,6 +18,7 @@ const DEFAULT_CONFIG = Object.freeze({
+   printNameOverrides: {},
+   localBgcodeDirs: [],
+   cameraRtspUrl: '',
++  nozzleRtspUrl: '',
+   useConnect: true,
+ });
+ 
+@@ -29,6 +30,8 @@ const ENV_OVERRIDES = Object.freeze({
+   PRINTER_PASSWORD: ['password', 'secret'],
+   CAMERA_RTSP_URL: ['cameraRtspUrl', 'string'],
+   CAMERA_STREAM_ENABLED: ['cameraStreamEnabled', 'boolean'],
++  NOZZLE_RTSP_URL: ['nozzleRtspUrl', 'string'],
++  NOZZLE_STREAM_ENABLED: ['nozzleStreamEnabled', 'boolean'],
+   SOURCE_CODE_URL: ['sourceCodeUrl', 'string'],
+ });
+ 
+@@ -42,6 +45,7 @@ const KNOWN_CONFIG_KEYS = new Set([
+   'cameraStreamKillGraceMs', 'cameraStreamIdleMs', 'cameraStreamStallMs',
+   'cameraStreamIoTimeoutMs', 'cameraStreamRestartBaseMs', 'cameraStreamRestartMaxMs',
+   'cameraStreamMaxFrameBytes',
++  'nozzleRtspUrl', 'nozzleStreamEnabled', 'nozzleStreamFps', 'nozzleStreamWidth', 'nozzleStreamJpegQuality',
+   'useConnect', 'connectPrinterUuid', 'connectPollMs', 'connectClientId', 'connectRefreshToken',
+   'useNetatmo', 'netatmoClientId', 'netatmoClientSecret', 'netatmoRefreshToken', 'netatmoPollMs',
+   'lastStateWriteMs', 'maxPrinterJsonBytes', 'maxPrinterResponseBytes',
+@@ -64,6 +68,9 @@ const INTEGER_RANGES = Object.freeze({
+   cameraStreamRestartBaseMs: [250, 30000],
+   cameraStreamRestartMaxMs: [1000, 120000],
+   cameraStreamMaxFrameBytes: [1024 * 1024, 64 * 1024 * 1024],
++  nozzleStreamFps: [1, 30],
++  nozzleStreamWidth: [320, 3840],
++  nozzleStreamJpegQuality: [2, 31],
+   connectPollMs: [5000, Number.MAX_SAFE_INTEGER],
+   netatmoPollMs: [60000, Number.MAX_SAFE_INTEGER],
+   lastStateWriteMs: [5000, Number.MAX_SAFE_INTEGER],
+@@ -72,12 +79,12 @@ const INTEGER_RANGES = Object.freeze({
+ });
+ 
+ const OPTIONAL_STRING_KEYS = Object.freeze([
+-  '$schema', 'cameraRtspUrl', 'cameraFfmpegPath', 'connectPrinterUuid',
++  '$schema', 'cameraRtspUrl', 'nozzleRtspUrl', 'cameraFfmpegPath', 'connectPrinterUuid',
+   'connectClientId', 'connectRefreshToken', 'netatmoClientId', 'netatmoClientSecret',
+   'netatmoRefreshToken',
+ ]);
+ 
+-const OPTIONAL_BOOLEAN_KEYS = Object.freeze(['cameraStreamEnabled', 'useConnect', 'useNetatmo']);
++const OPTIONAL_BOOLEAN_KEYS = Object.freeze(['cameraStreamEnabled', 'nozzleStreamEnabled', 'useConnect', 'useNetatmo']);
+ 
+ function firstEnvironmentValue(env, ...names) {
+   for (const name of names) {
+@@ -208,6 +215,19 @@ function validateConfig(config, { requirePrinter = true } = {}) {
+       errors.push('cameraRtspUrl must be a valid RTSP URL');
+     }
+   }
++  if (typeof config.nozzleRtspUrl === 'string' && config.nozzleRtspUrl !== config.nozzleRtspUrl.trim()) {
++    errors.push('nozzleRtspUrl must not have leading or trailing whitespace');
++  }
++  if (typeof config.nozzleRtspUrl === 'string' && config.nozzleRtspUrl) {
++    try {
++      const nozzleUrl = new URL(config.nozzleRtspUrl);
++      if (nozzleUrl.protocol !== 'rtsp:' && nozzleUrl.protocol !== 'rtsps:') {
++        errors.push('nozzleRtspUrl must use rtsp:// or rtsps://');
++      }
++    } catch {
++      errors.push('nozzleRtspUrl must be a valid RTSP URL');
++    }
++  }
+   if (typeof config.cameraFfmpegPath === 'string' && !config.cameraFfmpegPath.trim()) {
+     errors.push('cameraFfmpegPath must be a non-empty string');
+   }
+diff --git a/config.schema.json b/config.schema.json
+index f3e5d64..21fe0fd 100644
+--- a/config.schema.json
++++ b/config.schema.json
+@@ -80,6 +80,19 @@
+     "cameraStreamRestartBaseMs": { "type": "integer", "minimum": 250, "maximum": 30000, "default": 1000 },
+     "cameraStreamRestartMaxMs": { "type": "integer", "minimum": 1000, "maximum": 120000, "default": 15000 },
+     "cameraStreamMaxFrameBytes": { "type": "integer", "minimum": 1048576, "maximum": 67108864, "default": 16777216 },
++    "nozzleRtspUrl": {
++      "writeOnly": true,
++      "default": "",
++      "description": "Optional secondary (nozzle) RTSP source relayed to /api/nozzle.mjpeg. Same handling as cameraRtspUrl.",
++      "anyOf": [
++        { "const": "" },
++        { "type": "string", "pattern": "^rtsps?://" }
++      ]
++    },
++    "nozzleStreamEnabled": { "type": "boolean", "description": "When omitted, a non-empty nozzleRtspUrl enables the nozzle relay automatically." },
++    "nozzleStreamFps": { "type": "integer", "minimum": 1, "maximum": 30, "default": 15 },
++    "nozzleStreamWidth": { "type": "integer", "minimum": 320, "maximum": 3840, "default": 640 },
++    "nozzleStreamJpegQuality": { "type": "integer", "minimum": 2, "maximum": 31, "default": 6 },
+     "useConnect": { "type": "boolean", "default": true, "description": "Use Prusa Connect when both the printer UUID and refresh token are configured. Set false for an intentional PrusaLink-only deployment." },
+     "connectPrinterUuid": { "type": "string", "default": "" },
+     "connectPollMs": { "type": "integer", "minimum": 5000, "default": 5000 },
+diff --git a/docs/configuration.md b/docs/configuration.md
+index d6ec50f..92c78d5 100644
+--- a/docs/configuration.md
++++ b/docs/configuration.md
+@@ -43,6 +43,8 @@ still reveal deployment details.
+ | `PRINTER_PASSWORD` | `password` | non-empty string, required | Secret | `replace-with-your-prusalink-password` | PrusaLink password. |
+ | `CAMERA_RTSP_URL` | `cameraRtspUrl` | RTSP(S) URL, empty | Private; secret if credential-bearing | `rtsp://192.0.2.20/live` | Private camera source. Buddy3D uses an unencrypted, unauthenticated local feed without credentials in the URL. |
+ | `CAMERA_STREAM_ENABLED` | `cameraStreamEnabled` | boolean, automatic | Non-secret | `false` | Camera override (`true`/`false`, `1`/`0`, `yes`/`no`). |
++| `NOZZLE_RTSP_URL` | `nozzleRtspUrl` | RTSP(S) URL, empty | Private; secret if credential-bearing | `rtsp://192.0.2.20:8554/nozzle` | Optional secondary nozzle camera source, relayed to `/api/nozzle.mjpeg`. |
++| `NOZZLE_STREAM_ENABLED` | `nozzleStreamEnabled` | boolean, automatic | Non-secret | `false` | Nozzle relay override (`true`/`false`, `1`/`0`, `yes`/`no`). |
+ | `SOURCE_CODE_URL` | `sourceCodeUrl` | HTTP(S) URL, project repository | Public | `https://github.com/GoByeBye/LayerRelay` | Corresponding source offered to remote users. Modified deployments must use their exact source revision. |
+ 
+ Every override also accepts a `LAYER_RELAY_` prefix, for example
+@@ -155,6 +157,11 @@ linked product photos, package data, properties, or purchase URLs. See
+ | `cameraStreamRestartBaseMs` | integer 250–30000, `1000` | Non-secret | `1000` | Initial retry backoff. |
+ | `cameraStreamRestartMaxMs` | integer 1000–120000, `15000` | Non-secret | `15000` | Maximum retry backoff. |
+ | `cameraStreamMaxFrameBytes` | integer 1048576–67108864, `16777216` | Non-secret | `16777216` | Safety cap for one JPEG frame. |
++| `nozzleRtspUrl` | empty or RTSP(S) URL, empty | Private; secret if credential-bearing | `""` | Optional secondary (nozzle) RTSP source. Same handling as `cameraRtspUrl`; served at `/api/nozzle.mjpeg` and `/api/nozzle.jpg`. |
++| `nozzleStreamEnabled` | boolean, automatic | Non-secret | `false` | A non-empty `nozzleRtspUrl` enables the nozzle relay when omitted; `false` disables it. |
++| `nozzleStreamFps` | integer 1–30, `15` | Non-secret | `15` | Nozzle MJPEG output frame rate. |
++| `nozzleStreamWidth` | integer 320–3840, `640` | Non-secret | `640` | Nozzle output width; aspect ratio is retained. |
++| `nozzleStreamJpegQuality` | integer 2–31, `6` | Non-secret | `6` | Nozzle FFmpeg JPEG quality scale; lower is higher quality. |
+ 
+ ## Cloud integrations
+ 
+diff --git a/public/overlay.html b/public/overlay.html
+index 292f341..d20a675 100644
+--- a/public/overlay.html
++++ b/public/overlay.html
+@@ -38,6 +38,25 @@
+   .tnum { font-variant-numeric: tabular-nums; }
+ 
+   /* === Integrated camera dashboard ======================================== */
++  /* Secondary nozzle picture-in-picture: draggable (top bar), resizable
++     (bottom-right corner), default top-left, position remembered per browser. */
++  #nozzle-pip {
++    position: fixed; top: 16px; left: 16px; z-index: 3;
++    width: 22vw; height: 17vw; max-width: 480px; min-width: 150px; min-height: 120px;
++    border-radius: 12px; overflow: hidden; background: #08090c;
++    border: 1px solid rgba(255, 255, 255, 0.16);
++    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
++    resize: both;
++  }
++  #nozzle-pip[hidden] { display: none; }
++  #nozzle-bar {
++    height: 22px; display: flex; align-items: center; gap: 6px;
++    padding: 0 8px; font-size: 11px; letter-spacing: 0.04em; color: #cdd3de;
++    background: rgba(0, 0, 0, 0.55); cursor: grab; user-select: none; touch-action: none;
++  }
++  #nozzle-pip.dragging #nozzle-bar { cursor: grabbing; }
++  #nozzle-bar .nozzle-dot { width: 7px; height: 7px; border-radius: 50%; background: #3ecf6b; }
++  #nozzle-feed { width: 100%; height: calc(100% - 22px); object-fit: cover; display: block; }
+   #camera-stage {
+     position: fixed; inset: 0; z-index: 0;
+     overflow: hidden; background: #08090c;
+@@ -472,6 +491,11 @@
+   </div>
+ </div>
+ 
++<div id="nozzle-pip" hidden>
++  <div id="nozzle-bar"><span class="nozzle-dot"></span>Nozzle</div>
++  <img id="nozzle-feed" alt="Nozzle camera" />
++</div>
++
+ <div id="dashboard-controls" class="idle" data-camera-state="connecting">
+   <button id="controls-handle" type="button" aria-expanded="false" aria-controls="controls-panel">
+     <span class="control-live-dot"></span><span>Dashboard</span>
+@@ -657,6 +681,84 @@
+   }
+ 
+   var cameraOverride = queryFlag('camera');
++  var nozzleOverride = queryFlag('nozzle');
++  var nozzleAttached = false;
++  var nozzleRetryTimer = null;
++  var nozzlePipInit = false;
++  function initNozzlePip() {
++    if (nozzlePipInit) return;
++    nozzlePipInit = true;
++    var pip = document.getElementById('nozzle-pip');
++    var bar = document.getElementById('nozzle-bar');
++    if (!pip || !bar) return;
++    var KEY = 'lr_nozzle_pip';
++    function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
++    function save() {
++      try {
++        var r = pip.getBoundingClientRect();
++        localStorage.setItem(KEY, JSON.stringify({
++          left: Math.round(r.left), top: Math.round(r.top),
++          w: Math.round(r.width), h: Math.round(r.height)
++        }));
++      } catch (e) { /* storage unavailable */ }
++    }
++    try {
++      var saved = JSON.parse(localStorage.getItem(KEY) || 'null');
++      if (saved) {
++        if (saved.w) pip.style.width = saved.w + 'px';
++        if (saved.h) pip.style.height = saved.h + 'px';
++        if (typeof saved.left === 'number') pip.style.left = clamp(saved.left, 0, window.innerWidth - 40) + 'px';
++        if (typeof saved.top === 'number') pip.style.top = clamp(saved.top, 0, window.innerHeight - 40) + 'px';
++      }
++    } catch (e) { /* ignore bad json */ }
++    var dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
++    bar.addEventListener('pointerdown', function (e) {
++      dragging = true;
++      pip.classList.add('dragging');
++      var r = pip.getBoundingClientRect();
++      pip.style.left = r.left + 'px'; pip.style.top = r.top + 'px';
++      sx = e.clientX; sy = e.clientY; ox = r.left; oy = r.top;
++      try { bar.setPointerCapture(e.pointerId); } catch (e2) { /* older browsers */ }
++      e.preventDefault(); e.stopPropagation();
++    });
++    bar.addEventListener('pointermove', function (e) {
++      if (!dragging) return;
++      pip.style.left = clamp(ox + (e.clientX - sx), 0, window.innerWidth - pip.offsetWidth) + 'px';
++      pip.style.top = clamp(oy + (e.clientY - sy), 0, window.innerHeight - pip.offsetHeight) + 'px';
++    });
++    function endDrag() { if (!dragging) return; dragging = false; pip.classList.remove('dragging'); save(); }
++    bar.addEventListener('pointerup', endDrag);
++    bar.addEventListener('pointercancel', endDrag);
++    if (window.ResizeObserver) {
++      var ro = new ResizeObserver(function () { if (!dragging) save(); });
++      ro.observe(pip);
++    }
++  }
++  function applyNozzleStatus(status) {
++    var pip = document.getElementById('nozzle-pip');
++    var feed = document.getElementById('nozzle-feed');
++    if (!pip || !feed) return;
++    var enabled = nozzleOverride == null ? !!(status && status.enabled) : !!nozzleOverride;
++    if (!enabled) {
++      pip.hidden = true;
++      if (nozzleAttached) { feed.removeAttribute('src'); nozzleAttached = false; }
++      if (nozzleRetryTimer) { clearTimeout(nozzleRetryTimer); nozzleRetryTimer = null; }
++      return;
++    }
++    pip.hidden = false;
++    initNozzlePip();
++    if (!nozzleAttached) {
++      nozzleAttached = true;
++      feed.onerror = function () {
++        if (nozzleRetryTimer) return;
++        nozzleRetryTimer = setTimeout(function () {
++          nozzleRetryTimer = null;
++          if (!pip.hidden) feed.src = '/api/nozzle.mjpeg?_=' + Date.now();
++        }, 2000);
++      };
++      feed.src = '/api/nozzle.mjpeg?_=' + Date.now();
++    }
++  }
+   var cameraAuto = window.innerHeight > CAMERA_AUTO_MIN_HEIGHT;
+   var CAMERA_ENABLED = cameraOverride == null ? cameraAuto : cameraOverride;
+   var controlsOverride = queryFlag('controls');
+@@ -2553,6 +2655,7 @@
+         if (seq !== S.pollSeq) return;
+         S.data = j; S.syncedAt = performance.now(); S.failures = 0;
+         if (CAMERA_ENABLED) applyCameraStatus(j.camera);
++        applyNozzleStatus(j.nozzle);
+         // Smoothing buffer for Z: keep the last few readings so render can reject z-hop spikes.
+         if (j.axisZ != null) { S.zHist.push(j.axisZ); if (S.zHist.length > 4) S.zHist.shift(); }
+       })
+diff --git a/server.js b/server.js
+index dd0173a..e78dba0 100644
+--- a/server.js
++++ b/server.js
+@@ -61,6 +61,28 @@ const runtimeConfig = loadRuntimeConfig({ rootDir: __dirname });
+ const cfg = runtimeConfig.config;
+ const sourceCodeUrl = new URL(cfg.sourceCodeUrl).href;
+ const cameraStream = new CameraStream(cfg);
++// The nozzle camera reuses the primary relay logic with its own RTSP source and a
++// close-range default profile (smaller frame, gentler rate). Undefined tuning keys
++// fall back to the shared camera defaults inside CameraStream.
++function nozzleCameraConfig(config) {
++  return {
++    cameraRtspUrl: config.nozzleRtspUrl,
++    cameraStreamEnabled: config.nozzleStreamEnabled,
++    cameraStreamFps: config.nozzleStreamFps != null ? config.nozzleStreamFps : 15,
++    cameraStreamWidth: config.nozzleStreamWidth != null ? config.nozzleStreamWidth : 640,
++    cameraStreamJpegQuality: config.nozzleStreamJpegQuality != null ? config.nozzleStreamJpegQuality : 6,
++    cameraFfmpegPath: config.cameraFfmpegPath,
++    cameraStreamThreads: config.cameraStreamThreads,
++    cameraStreamKillGraceMs: config.cameraStreamKillGraceMs,
++    cameraStreamIdleMs: config.cameraStreamIdleMs,
++    cameraStreamStallMs: config.cameraStreamStallMs,
++    cameraStreamIoTimeoutMs: config.cameraStreamIoTimeoutMs,
++    cameraStreamRestartBaseMs: config.cameraStreamRestartBaseMs,
++    cameraStreamRestartMaxMs: config.cameraStreamRestartMaxMs,
++    cameraStreamMaxFrameBytes: config.cameraStreamMaxFrameBytes,
++  };
++}
++const nozzleStream = new CameraStream(nozzleCameraConfig(cfg));
+ const CACHE_DIR = runtimeConfig.dataDir;
+ fs.mkdirSync(CACHE_DIR, { recursive: true, mode: 0o700 });
+ if (process.platform !== 'win32') {
+@@ -1127,6 +1149,7 @@ app.get('/api/state', (_req, res) => {
+     toolSlots: toolSettings.effective.toolSlots,
+     toolSettings,
+     camera: cameraStream.getStatus(),
++    nozzle: nozzleStream.getStatus(),
+     // Ambient room/outdoor readings from the Netatmo station (null when not configured).
+     roomTemp: netatmoLive ? netatmoLive.roomTemp : null,
+     roomHumidity: netatmoLive ? netatmoLive.roomHumidity : null,
+@@ -1140,6 +1163,13 @@ app.get('/api/camera/status', (_req, res) => {
+ });
+ app.get('/api/camera.mjpeg', (req, res) => cameraStream.handleMjpeg(req, res));
+ app.get('/api/camera.jpg', (req, res) => cameraStream.handleSnapshot(req, res));
++// Optional secondary (nozzle) camera: a second shared ffmpeg reader with its own
++// RTSP source and endpoints. Disabled unless nozzleRtspUrl is configured.
++app.get('/api/nozzle/status', (_req, res) => {
++  res.json(nozzleStream.getStatus());
++});
++app.get('/api/nozzle.mjpeg', (req, res) => nozzleStream.handleMjpeg(req, res));
++app.get('/api/nozzle.jpg', (req, res) => nozzleStream.handleSnapshot(req, res));
+ // Per-job map for the overlay's progress-bar swap ticks: every toolchange's progress
+ // position, fetched once per job (keyed by jobKey == thumbnailKey) instead of per poll.
+ app.get('/api/jobmap', (_req, res) => {
+@@ -1186,6 +1216,7 @@ const httpServer = app.listen(listenPort, listenHost, () => {
+   console.log(`LayerRelay dashboard: http://${listenHost}:${listenPort}/`);
+   console.log(`state JSON:            http://${listenHost}:${listenPort}/api/state`);
+   console.log(`camera relay:          ${cameraStream.enabled ? `http://${listenHost}:${listenPort}/api/camera.mjpeg` : 'disabled (set cameraRtspUrl in config.json)'}`);
++  console.log(`nozzle relay:          ${nozzleStream.enabled ? `http://${listenHost}:${listenPort}/api/nozzle.mjpeg` : 'disabled (set nozzleRtspUrl in config.json)'}`);
+   console.log(`corresponding source:  ${sourceCodeUrl}`);
+   console.log(`configuration:         ${runtimeConfig.source}; state: ${CACHE_DIR}`);
+   pollLoop();
+@@ -1208,10 +1239,11 @@ function stopServer() {
+   if (stopping) return;
+   stopping = true;
+   cameraStream.close();
++  nozzleStream.close();
+   httpServer.close(() => process.exit(0));
+   const forceExit = setTimeout(() => process.exit(1), 5000);
+   if (typeof forceExit.unref === 'function') forceExit.unref();
+ }
+ process.once('SIGINT', stopServer);
+ process.once('SIGTERM', stopServer);
+-process.once('exit', () => cameraStream.close());
++process.once('exit', () => { cameraStream.close(); nozzleStream.close(); });
+diff --git a/test/nozzle-camera.test.js b/test/nozzle-camera.test.js
+new file mode 100644
+index 0000000..0e56036
+--- /dev/null
++++ b/test/nozzle-camera.test.js
+@@ -0,0 +1,56 @@
++'use strict';
++
++const assert = require('node:assert/strict');
++const { test } = require('bun:test');
++const { validateConfig, DEFAULT_CONFIG } = require('../config.js');
++const { CameraStream } = require('../camera-stream.js');
++
++const base = {
++  printerHost: '192.0.2.10',
++  username: 'maker',
++  password: 'secret',
++  sourceCodeUrl: 'https://github.com/GoByeBye/LayerRelay',
++  listenHost: '127.0.0.1',
++};
++
++test('accepts a valid nozzle camera configuration', () => {
++  const cfg = validateConfig({
++    ...base,
++    nozzleRtspUrl: 'rtsp://192.0.2.20:8554/nozzle',
++    nozzleStreamEnabled: true,
++    nozzleStreamFps: 15,
++    nozzleStreamWidth: 640,
++    nozzleStreamJpegQuality: 6,
++  });
++  assert.equal(cfg.nozzleRtspUrl, 'rtsp://192.0.2.20:8554/nozzle');
++});
++
++test('nozzle is absent by default and off when unset', () => {
++  assert.equal('nozzleRtspUrl' in DEFAULT_CONFIG, true);
++  assert.equal(DEFAULT_CONFIG.nozzleRtspUrl, '');
++  const relay = new CameraStream({ cameraRtspUrl: DEFAULT_CONFIG.nozzleRtspUrl });
++  assert.equal(relay.enabled, false);
++  assert.equal(relay.getStatus().state, 'disabled');
++});
++
++test('rejects a non-RTSP nozzle URL', () => {
++  assert.throws(
++    () => validateConfig({ ...base, nozzleRtspUrl: 'http://192.0.2.20/stream' }),
++    /nozzleRtspUrl must use rtsp/,
++  );
++});
++
++test('rejects out-of-range nozzle tuning', () => {
++  assert.throws(() => validateConfig({ ...base, nozzleStreamFps: 99 }), /nozzleStreamFps/);
++  assert.throws(() => validateConfig({ ...base, nozzleStreamWidth: 100 }), /nozzleStreamWidth/);
++});
++
++test('a nozzle-style config produces an enabled relay via CameraStream', () => {
++  const relay = new CameraStream({
++    cameraRtspUrl: 'rtsp://192.0.2.20:8554/nozzle',
++    cameraStreamWidth: 640,
++    cameraStreamFps: 15,
++  });
++  assert.equal(relay.enabled, true);
++  assert.equal(relay.options.width, 640);
++});

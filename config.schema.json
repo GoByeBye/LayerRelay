@@ -80,6 +80,19 @@
     "cameraStreamRestartBaseMs": { "type": "integer", "minimum": 250, "maximum": 30000, "default": 1000 },
     "cameraStreamRestartMaxMs": { "type": "integer", "minimum": 1000, "maximum": 120000, "default": 15000 },
     "cameraStreamMaxFrameBytes": { "type": "integer", "minimum": 1048576, "maximum": 67108864, "default": 16777216 },
+    "nozzleRtspUrl": {
+      "writeOnly": true,
+      "default": "",
+      "description": "Optional secondary (nozzle) RTSP source relayed to /api/nozzle.mjpeg. Same handling as cameraRtspUrl.",
+      "anyOf": [
+        { "const": "" },
+        { "type": "string", "pattern": "^rtsps?://" }
+      ]
+    },
+    "nozzleStreamEnabled": { "type": "boolean", "description": "When omitted, a non-empty nozzleRtspUrl enables the nozzle relay automatically." },
+    "nozzleStreamFps": { "type": "integer", "minimum": 1, "maximum": 30, "default": 15 },
+    "nozzleStreamWidth": { "type": "integer", "minimum": 320, "maximum": 3840, "default": 640 },
+    "nozzleStreamJpegQuality": { "type": "integer", "minimum": 2, "maximum": 31, "default": 6 },
     "useConnect": { "type": "boolean", "default": true, "description": "Use Prusa Connect when both the printer UUID and refresh token are configured. Set false for an intentional PrusaLink-only deployment." },
     "connectPrinterUuid": { "type": "string", "default": "" },
     "connectPollMs": { "type": "integer", "minimum": 5000, "default": 5000 },

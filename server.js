@@ -61,6 +61,28 @@ const runtimeConfig = loadRuntimeConfig({ rootDir: __dirname });
 const cfg = runtimeConfig.config;
 const sourceCodeUrl = new URL(cfg.sourceCodeUrl).href;
 const cameraStream = new CameraStream(cfg);
+// The nozzle camera reuses the primary relay logic with its own RTSP source and a
+// close-range default profile (smaller frame, gentler rate). Undefined tuning keys
+// fall back to the shared camera defaults inside CameraStream.
+function nozzleCameraConfig(config) {
+  return {
+    cameraRtspUrl: config.nozzleRtspUrl,
+    cameraStreamEnabled: config.nozzleStreamEnabled,
+    cameraStreamFps: config.nozzleStreamFps != null ? config.nozzleStreamFps : 15,
+    cameraStreamWidth: config.nozzleStreamWidth != null ? config.nozzleStreamWidth : 640,
+    cameraStreamJpegQuality: config.nozzleStreamJpegQuality != null ? config.nozzleStreamJpegQuality : 6,
+    cameraFfmpegPath: config.cameraFfmpegPath,
+    cameraStreamThreads: config.cameraStreamThreads,
+    cameraStreamKillGraceMs: config.cameraStreamKillGraceMs,
+    cameraStreamIdleMs: config.cameraStreamIdleMs,
+    cameraStreamStallMs: config.cameraStreamStallMs,
+    cameraStreamIoTimeoutMs: config.cameraStreamIoTimeoutMs,
+    cameraStreamRestartBaseMs: config.cameraStreamRestartBaseMs,
+    cameraStreamRestartMaxMs: config.cameraStreamRestartMaxMs,
+    cameraStreamMaxFrameBytes: config.cameraStreamMaxFrameBytes,
+  };
+}
+const nozzleStream = new CameraStream(nozzleCameraConfig(cfg));
 const CACHE_DIR = runtimeConfig.dataDir;
 fs.mkdirSync(CACHE_DIR, { recursive: true, mode: 0o700 });
 if (process.platform !== 'win32') {
@@ -1127,6 +1149,7 @@ app.get('/api/state', (_req, res) => {
     toolSlots: toolSettings.effective.toolSlots,
     toolSettings,
     camera: cameraStream.getStatus(),
+    nozzle: nozzleStream.getStatus(),
     // Ambient room/outdoor readings from the Netatmo station (null when not configured).
     roomTemp: netatmoLive ? netatmoLive.roomTemp : null,
     roomHumidity: netatmoLive ? netatmoLive.roomHumidity : null,
@@ -1140,6 +1163,13 @@ app.get('/api/camera/status', (_req, res) => {
 });
 app.get('/api/camera.mjpeg', (req, res) => cameraStream.handleMjpeg(req, res));
 app.get('/api/camera.jpg', (req, res) => cameraStream.handleSnapshot(req, res));
+// Optional secondary (nozzle) camera: a second shared ffmpeg reader with its own
+// RTSP source and endpoints. Disabled unless nozzleRtspUrl is configured.
+app.get('/api/nozzle/status', (_req, res) => {
+  res.json(nozzleStream.getStatus());
+});
+app.get('/api/nozzle.mjpeg', (req, res) => nozzleStream.handleMjpeg(req, res));
+app.get('/api/nozzle.jpg', (req, res) => nozzleStream.handleSnapshot(req, res));
 // Per-job map for the overlay's progress-bar swap ticks: every toolchange's progress
 // position, fetched once per job (keyed by jobKey == thumbnailKey) instead of per poll.
 app.get('/api/jobmap', (_req, res) => {
@@ -1186,6 +1216,7 @@ const httpServer = app.listen(listenPort, listenHost, () => {
   console.log(`LayerRelay dashboard: http://${listenHost}:${listenPort}/`);
   console.log(`state JSON:            http://${listenHost}:${listenPort}/api/state`);
   console.log(`camera relay:          ${cameraStream.enabled ? `http://${listenHost}:${listenPort}/api/camera.mjpeg` : 'disabled (set cameraRtspUrl in config.json)'}`);
+  console.log(`nozzle relay:          ${nozzleStream.enabled ? `http://${listenHost}:${listenPort}/api/nozzle.mjpeg` : 'disabled (set nozzleRtspUrl in config.json)'}`);
   console.log(`corresponding source:  ${sourceCodeUrl}`);
   console.log(`configuration:         ${runtimeConfig.source}; state: ${CACHE_DIR}`);
   pollLoop();
@@ -1208,10 +1239,11 @@ function stopServer() {
   if (stopping) return;
   stopping = true;
   cameraStream.close();
+  nozzleStream.close();
   httpServer.close(() => process.exit(0));
   const forceExit = setTimeout(() => process.exit(1), 5000);
   if (typeof forceExit.unref === 'function') forceExit.unref();
 }
 process.once('SIGINT', stopServer);
 process.once('SIGTERM', stopServer);
-process.once('exit', () => cameraStream.close());
+process.once('exit', () => { cameraStream.close(); nozzleStream.close(); });

@@ -18,6 +18,7 @@ const DEFAULT_CONFIG = Object.freeze({
   printNameOverrides: {},
   localBgcodeDirs: [],
   cameraRtspUrl: '',
+  nozzleRtspUrl: '',
   useConnect: true,
 });
 
@@ -29,6 +30,8 @@ const ENV_OVERRIDES = Object.freeze({
   PRINTER_PASSWORD: ['password', 'secret'],
   CAMERA_RTSP_URL: ['cameraRtspUrl', 'string'],
   CAMERA_STREAM_ENABLED: ['cameraStreamEnabled', 'boolean'],
+  NOZZLE_RTSP_URL: ['nozzleRtspUrl', 'string'],
+  NOZZLE_STREAM_ENABLED: ['nozzleStreamEnabled', 'boolean'],
   SOURCE_CODE_URL: ['sourceCodeUrl', 'string'],
 });
 
@@ -42,6 +45,7 @@ const KNOWN_CONFIG_KEYS = new Set([
   'cameraStreamKillGraceMs', 'cameraStreamIdleMs', 'cameraStreamStallMs',
   'cameraStreamIoTimeoutMs', 'cameraStreamRestartBaseMs', 'cameraStreamRestartMaxMs',
   'cameraStreamMaxFrameBytes',
+  'nozzleRtspUrl', 'nozzleStreamEnabled', 'nozzleStreamFps', 'nozzleStreamWidth', 'nozzleStreamJpegQuality',
   'useConnect', 'connectPrinterUuid', 'connectPollMs', 'connectClientId', 'connectRefreshToken',
   'useNetatmo', 'netatmoClientId', 'netatmoClientSecret', 'netatmoRefreshToken', 'netatmoPollMs',
   'lastStateWriteMs', 'maxPrinterJsonBytes', 'maxPrinterResponseBytes',
@@ -64,6 +68,9 @@ const INTEGER_RANGES = Object.freeze({
   cameraStreamRestartBaseMs: [250, 30000],
   cameraStreamRestartMaxMs: [1000, 120000],
   cameraStreamMaxFrameBytes: [1024 * 1024, 64 * 1024 * 1024],
+  nozzleStreamFps: [1, 30],
+  nozzleStreamWidth: [320, 3840],
+  nozzleStreamJpegQuality: [2, 31],
   connectPollMs: [5000, Number.MAX_SAFE_INTEGER],
   netatmoPollMs: [60000, Number.MAX_SAFE_INTEGER],
   lastStateWriteMs: [5000, Number.MAX_SAFE_INTEGER],
@@ -72,12 +79,12 @@ const INTEGER_RANGES = Object.freeze({
 });
 
 const OPTIONAL_STRING_KEYS = Object.freeze([
-  '$schema', 'cameraRtspUrl', 'cameraFfmpegPath', 'connectPrinterUuid',
+  '$schema', 'cameraRtspUrl', 'nozzleRtspUrl', 'cameraFfmpegPath', 'connectPrinterUuid',
   'connectClientId', 'connectRefreshToken', 'netatmoClientId', 'netatmoClientSecret',
   'netatmoRefreshToken',
 ]);
 
-const OPTIONAL_BOOLEAN_KEYS = Object.freeze(['cameraStreamEnabled', 'useConnect', 'useNetatmo']);
+const OPTIONAL_BOOLEAN_KEYS = Object.freeze(['cameraStreamEnabled', 'nozzleStreamEnabled', 'useConnect', 'useNetatmo']);
 
 function firstEnvironmentValue(env, ...names) {
   for (const name of names) {
@@ -206,6 +213,19 @@ function validateConfig(config, { requirePrinter = true } = {}) {
       }
     } catch {
       errors.push('cameraRtspUrl must be a valid RTSP URL');
+    }
+  }
+  if (typeof config.nozzleRtspUrl === 'string' && config.nozzleRtspUrl !== config.nozzleRtspUrl.trim()) {
+    errors.push('nozzleRtspUrl must not have leading or trailing whitespace');
+  }
+  if (typeof config.nozzleRtspUrl === 'string' && config.nozzleRtspUrl) {
+    try {
+      const nozzleUrl = new URL(config.nozzleRtspUrl);
+      if (nozzleUrl.protocol !== 'rtsp:' && nozzleUrl.protocol !== 'rtsps:') {
+        errors.push('nozzleRtspUrl must use rtsp:// or rtsps://');
+      }
+    } catch {
+      errors.push('nozzleRtspUrl must be a valid RTSP URL');
     }
   }
   if (typeof config.cameraFfmpegPath === 'string' && !config.cameraFfmpegPath.trim()) {
