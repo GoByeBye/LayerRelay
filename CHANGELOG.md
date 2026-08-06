@@ -23,6 +23,8 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   inventory, independent count/presence/name/colour overrides, Auto reset for
   count/presence/type/colour, persistent settings, and local type-ahead over a
   normalized OpenPrintTag suggestion index loaded by `openprinttag-index.js`
+- A persisted global Enhanced camera profile with Lanczos scaling, light
+  sharpening, and single-reader hot reconfiguration from the dashboard
 
 ### Changed
 
@@ -50,8 +52,9 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Docker build context excludes local credentials, state, and scratch pages
 - Cloud asset downloads are restricted to authenticated same-origin Prusa Connect paths
-- Browser configuration writes are limited to the non-secret tool inventory,
-  use same-origin JSON requests, and never expose or rewrite operator credentials
+- Browser configuration writes are limited to the non-secret camera profile and
+  tool inventory, use same-origin JSON requests, and never expose or rewrite
+  operator credentials
 
 [Unreleased]: https://github.com/GoByeBye/LayerRelay/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/GoByeBye/LayerRelay/releases/tag/v0.1.0

@@ -39,7 +39,7 @@
       "uniqueItems": true,
       "items": { "type": "string", "pattern": "^https?://[^/]+$" },
       "default": [],
-      "description": "Exact additional browser origins allowed to write tool settings, for authenticated reverse proxies or named hosts. Loopback and literal IP origins work without entries."
+      "description": "Exact additional browser origins allowed to write dashboard settings, for authenticated reverse proxies or named hosts. Loopback and literal IP origins work without entries."
     },
     "toolSlots": {
       "type": "object",
