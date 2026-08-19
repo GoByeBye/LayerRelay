@@ -191,6 +191,21 @@ activity card instead of `READY`. It uses a specific label only when an upstream
 state, title, or operation field names the task; otherwise it honestly says
 `Printer busy`. It never guesses a calibration type from temperatures or movement.
 
+## Static GitHub Pages build
+
+The repository also builds a static version of the overlay that runs entirely
+in the browser and needs no server of its own. A dedicated workflow builds
+`dist/pages` with Bun and deploys it to GitHub Pages on every push to `master`,
+once **Settings > Pages > Source** is set to **GitHub Actions**. The published
+page has three modes: a generated demo print, local analysis of a dropped
+`.bgcode` or `.gcode` file, and an optional live bridge to a LayerRelay server
+you run. Decoding, timelines, thumbnails, and filament search all run
+in-browser, and a dropped file never leaves the machine. Browsers cannot poll
+PrusaLink directly because the printer firmware sends no CORS headers, so live
+telemetry always goes through a LayerRelay server with `apiReadAllowedOrigins`
+configured. Setup, browser permissions, and the security boundaries are
+documented in [docs/static-hosting.md](docs/static-hosting.md).
+
 ## How the tool and layer timeline works
 
 PrusaLink does not expose the INDX active tool or swap count as an MMU. Prusa
@@ -231,6 +246,8 @@ not an extrusion timeline.
 | `tool-settings.js` | Validated, immediately applied tool inventory persisted under `DATA_DIR` |
 | `openprinttag-index.js` | Startup-refreshed local suggestion index derived from the public OpenPrintTag material and brand snapshots |
 | `public/overlay.html` | Self-contained overlay UI; browser requests remain same-origin |
+| `pages/` | Browser ESM ports of the decoder, timelines, and a virtual `/api` engine for the static GitHub Pages build |
+| `scripts/build-pages.mjs` | Builds the static dashboard into `dist/pages`: transformed overlay, bundled browser code, and a generated demo `.bgcode` |
 | `tools/` | Guarded restart, camera snapshot, and Connect token-display helpers |
 
 HTTP endpoints:

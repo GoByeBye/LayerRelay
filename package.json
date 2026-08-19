@@ -28,6 +28,7 @@
   "type": "commonjs",
   "main": "server.js",
   "scripts": {
+    "build:pages": "bun scripts/build-pages.mjs",
     "check": "bun scripts/check.mjs",
     "doctor": "bun scripts/doctor.mjs",
     "setup": "bun scripts/setup.mjs",

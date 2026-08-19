@@ -23,6 +23,16 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   inventory, independent count/presence/name/colour overrides, Auto reset for
   count/presence/type/colour, persistent settings, and local type-ahead over a
   normalized OpenPrintTag suggestion index loaded by `openprinttag-index.js`
+- A static GitHub Pages build of the dashboard with demo, local-file analysis,
+  and live-bridge modes, deployed from `dist/pages` by a dedicated Pages
+  workflow and documented in `docs/static-hosting.md`
+- An in-browser ESM port of the `.bgcode` container decoder, timeline
+  analysis, thumbnail extraction with QOI support, and filament suggestions
+  under `pages/app/`
+- A deterministic `.bgcode` builder that generates the published demo print
+  and binary test fixtures at build and test time
+- An `apiReadAllowedOrigins` allowlist that grants listed browser origins
+  cross-origin read access to the `/api` endpoints
 
 ### Changed
 
@@ -52,6 +62,8 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Cloud asset downloads are restricted to authenticated same-origin Prusa Connect paths
 - Browser configuration writes are limited to the non-secret tool inventory,
   use same-origin JSON requests, and never expose or rewrite operator credentials
+- Cross-origin `/api` reads and the image-route `Cross-Origin-Resource-Policy`
+  relaxation stay disabled until `apiReadAllowedOrigins` is configured
 
 [Unreleased]: https://github.com/GoByeBye/LayerRelay/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/GoByeBye/LayerRelay/releases/tag/v0.1.0
