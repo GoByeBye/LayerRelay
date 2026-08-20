@@ -43,6 +43,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and binary test fixtures at build and test time
 - An `apiReadAllowedOrigins` allowlist that grants listed browser origins
   cross-origin read access to the `/api` endpoints
+- Live camera video in cloud mode over Prusa Connect's WebRTC path, negotiated
+  directly from the browser with no server, using a camera token pasted into
+  the panel. Enabling WebRTC on a camera turns its RTSP server off, so the page
+  only ever consumes an already-streaming camera and never changes the setting
 
 ### Changed
 

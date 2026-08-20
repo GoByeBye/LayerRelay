@@ -58,6 +58,8 @@ const CLOUD_TOPIC_PREFIX = /^v1\/devices\/printers\/[^/]+\//;
 // Printer id only. The refresh token lives in connect-auth's own key and is
 // never written, read, or rendered by the engine.
 export const CLOUD_PRINTER_KEY = 'layer-relay.static.cloud.printer';
+// Camera-scoped, not an account credential, but still sensitive: never rendered back.
+export const CLOUD_CAMERA_KEY = 'layer-relay.static.cloud.camera';
 const CLOUD_BACKOFF_MIN_MS = 2000;
 const CLOUD_BACKOFF_MAX_MS = 30000;
 // A CONNACK/SUBACK that never arrives must not wedge the link forever.
@@ -259,6 +261,11 @@ export function createEngine(options = {}) {
     const module = await import('./connect-live.mjs');
     return module.createConnectState();
   });
+  // Lazy so a build without a camera token never loads the WebRTC code.
+  const cameraFactory = options.cameraFactory || (async () => {
+    const module = await import('./camera-webrtc.mjs');
+    return module.createCloudCamera;
+  });
   const setTimer = options.setTimeoutImpl ||
     ((fn, ms) => (typeof setTimeout === 'function' ? setTimeout(fn, ms) : null));
   const clearTimer = options.clearTimeoutImpl ||
@@ -322,6 +329,10 @@ export function createEngine(options = {}) {
   // socket for a mode the user already left.
   let cloudSeq = 0;
   let cloudAuth = null;
+  let cloudCamera = null;
+  let cloudCameraToken = null;
+  let cloudCameraStatus = null;
+  let cloudCameraStream = null;
   let cloudLive = null;         // connect-live topic mapper
   let cloudClient = null;       // MQTT client
   let cloudPrinterId = null;
@@ -522,9 +533,20 @@ export function createEngine(options = {}) {
 
   // Invalidates the current epoch, stops every timer, and drops the socket.
   // Safe to call from any mode.
+  function stopCloudCamera() {
+    const camera = cloudCamera;
+    cloudCamera = null;
+    cloudCameraStatus = null;
+    cloudCameraStream = null;
+    if (camera) {
+      try { camera.stop(); } catch { /* already stopped */ }
+    }
+  }
+
   function teardownCloud() {
     cloudSeq += 1;
     clearCloudTimers();
+    stopCloudCamera();
     closeCloudClient();
     cloudPhase = 'idle';
     cloudAnchorAt = null;
@@ -708,6 +730,10 @@ export function createEngine(options = {}) {
     cloudPhase = 'connecting';
     cloudAnchorAt = now();
     storageWrite(CLOUD_PRINTER_KEY, printerId);
+    const cameraToken = config && typeof config.cameraToken === 'string'
+      ? config.cameraToken.trim() : '';
+    if (cameraToken) storageWrite(CLOUD_CAMERA_KEY, cameraToken);
+    cloudCameraToken = cameraToken || storageRead(CLOUD_CAMERA_KEY) || null;
     emit();
 
     try {
@@ -739,7 +765,70 @@ export function createEngine(options = {}) {
         throw error;
       }
     }
+    startCloudCamera(seq);
     await connectCloud(seq);
+  }
+
+  // Video is additive: telemetry is the feature that works, so every camera
+  // failure is contained here and only ever shows up in the camera status.
+  function startCloudCamera(seq) {
+    if (!cloudCameraToken || cloudCamera) return;
+    cloudCameraStatus = { phase: 'connecting', error: null, live: false };
+    Promise.resolve()
+      .then(() => cameraFactory())
+      .then((createCloudCamera) => {
+        if (seq !== cloudSeq || !cloudCameraToken) return;
+        const camera = createCloudCamera({
+          cameraToken: cloudCameraToken,
+          getAccessToken: () => cloudAuth.getAccessToken(),
+          fetchImpl,
+        });
+        cloudCamera = camera;
+        camera.on('status', (status) => {
+          if (seq !== cloudSeq) return;
+          cloudCameraStatus = status;
+          emit();
+        });
+        camera.on('stream', (stream) => {
+          if (seq !== cloudSeq) return;
+          cloudCameraStream = stream;
+          emit();
+        });
+        camera.on('error', (error) => {
+          if (seq !== cloudSeq) return;
+          cloudCameraStatus = { phase: 'error', error: String((error && error.message) || error), live: false };
+          cloudCameraStream = null;
+          emit();
+        });
+        return camera.start();
+      })
+      .catch((error) => {
+        if (seq !== cloudSeq) return;
+        cloudCameraStatus = {
+          phase: 'error', live: false,
+          error: `the camera could not start: ${(error && error.message) || error}`,
+        };
+        emit();
+      });
+  }
+
+  // The overlay drives its whole camera UI from this object, so cloud mode
+  // reports a real one whenever a camera token is configured.
+  function cloudCameraState() {
+    if (!cloudCameraToken) {
+      return { ...DISABLED_STREAM_STATUS, error: CLOUD_CAMERA_REASON };
+    }
+    const status = cloudCameraStatus || { phase: 'connecting', error: null, live: false };
+    const live = status.phase === 'live';
+    return {
+      ...DISABLED_STREAM_STATUS,
+      enabled: true,
+      running: status.phase !== 'error' && status.phase !== 'idle',
+      online: live,
+      state: live ? 'live' : (status.phase === 'error' ? 'disabled' : 'connecting'),
+      subscribers: live ? 1 : 0,
+      error: status.error || null,
+    };
   }
 
   function cloudSnapshot() {
@@ -975,8 +1064,7 @@ export function createEngine(options = {}) {
     const key = thumbnailKey();
     if (cloud && completedJob && completedJob.jobKey !== key) completedJob = null;
     const freshness = cloud ? cloudFreshness(base.online, base.state) : { online: true, staleSec: 0 };
-    const camera = { ...DISABLED_STREAM_STATUS };
-    if (cloud) camera.error = CLOUD_CAMERA_REASON;
+    const camera = cloud ? cloudCameraState() : { ...DISABLED_STREAM_STATUS };
     const out = {
       ...base,
       activity: base.activity ?? null,
@@ -1173,7 +1261,9 @@ export function createEngine(options = {}) {
     }
     cloudAuth = null;
     cloudUserId = null;
+    cloudCameraToken = null;
     storageRemove(CLOUD_PRINTER_KEY);
+    storageRemove(CLOUD_CAMERA_KEY);
     emit();
   }
 
@@ -1185,6 +1275,7 @@ export function createEngine(options = {}) {
     setModeCloud,
     stopCloud: teardownCloud,
     forgetCloudCredentials,
+    getCameraStream: () => cloudCameraStream,
     getStatus,
     play,
     pause,

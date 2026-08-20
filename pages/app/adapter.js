@@ -547,7 +547,7 @@ export function createStaticApp(options) {
       return;
     }
     const token = String(rawToken == null ? '' : rawToken).trim();
-    if (refs) refs.tokenInput.value = '';
+    if (refs) { refs.tokenInput.value = ''; refs.cameraInput.value = ''; }
     const seq = ++cloudSeq;
     demoSeq += 1;
     fileSeq += 1;
@@ -560,6 +560,8 @@ export function createStaticApp(options) {
     storageSet(win, MODE_KEY, 'cloud');
     const request = { printerUuid: printerId };
     if (token) request.refreshToken = token;
+    const cameraToken = String(rawCamera == null ? '' : rawCamera).trim();
+    if (cameraToken) request.cameraToken = cameraToken;
     let pending;
     try {
       pending = Promise.resolve(engine.setModeCloud(request));
@@ -582,6 +584,7 @@ export function createStaticApp(options) {
     if (refs) {
       refs.tokenInput.value = '';
       refs.printerInput.value = '';
+      refs.cameraInput.value = '';
     }
     state.printerId = '';
     cloudSeq += 1;
@@ -761,6 +764,18 @@ export function createStaticApp(options) {
     tokenField.appendChild(built.tokenInput);
     built.cloudSection.appendChild(tokenField);
 
+    const cameraField = makeEl(doc, 'div', 'lr-field');
+    const cameraLabel = makeEl(doc, 'label', 'lr-label', 'Camera token (optional)');
+    cameraLabel.setAttribute('for', 'lr-connect-camera');
+    cameraField.appendChild(cameraLabel);
+    built.cameraInput = makeEl(doc, 'input', 'lr-input');
+    built.cameraInput.id = 'lr-connect-camera';
+    built.cameraInput.type = 'password';
+    built.cameraInput.setAttribute('autocomplete', 'off');
+    built.cameraInput.setAttribute('placeholder', 'from the Prusa Connect camera page');
+    cameraField.appendChild(built.cameraInput);
+    built.cloudSection.appendChild(cameraField);
+
     const cloudRow = makeEl(doc, 'div', 'lr-cloud-row');
     built.cloudBtn = makeEl(doc, 'button', 'lr-btn', 'Connect');
     built.cloudBtn.type = 'button';
@@ -886,11 +901,11 @@ export function createStaticApp(options) {
       }
     });
     function submitCloud() {
-      connectCloud(refs.printerInput.value, refs.tokenInput.value);
+      connectCloud(refs.printerInput.value, refs.tokenInput.value, refs.cameraInput.value);
     }
     refs.cloudBtn.addEventListener('click', submitCloud);
     refs.forgetBtn.addEventListener('click', forgetCloud);
-    for (const field of [refs.printerInput, refs.tokenInput]) {
+    for (const field of [refs.printerInput, refs.tokenInput, refs.cameraInput]) {
       field.addEventListener('keydown', function (event) {
         if (event.key !== 'Enter') return;
         event.preventDefault();
@@ -1103,6 +1118,7 @@ export function createStaticApp(options) {
     refs.connectBtn.disabled = !engine;
     refs.cloudBtn.disabled = !engine;
     refs.forgetBtn.disabled = !engine;
+    refs.cameraInput.disabled = !engine;
     refs.playBtn.textContent = pickPlaying(status) ? 'Pause' : 'Play';
 
     const progress = pickNumber(status, ['progressPct', 'progress', 'pct']);
@@ -1129,6 +1145,51 @@ export function createStaticApp(options) {
   // DOM-free activation of the persisted / URL-selected mode. Runs at bundle
   // evaluation so the overlay's very first poll already hits live data even
   // when the panel is hidden by ?controls=0.
+  // The overlay renders its camera as an <img> fed by an MJPEG URL, which a
+  // MediaStream cannot drive. Cloud mode therefore layers a <video> over the
+  // same stage and hides the img while the stream plays, leaving the overlay's
+  // own status chrome (and its sizing) untouched.
+  let videoEl = null;
+  function syncCameraVideo() {
+    if (!engine || typeof engine.getCameraStream !== 'function') return;
+    const doc = win.document;
+    if (!doc) return;
+    let stream = null;
+    try { stream = engine.getCameraStream(); } catch (err) { stream = null; }
+    const stage = doc.getElementById('camera-stage');
+    const feed = doc.getElementById('camera-feed');
+    if (!stage) return;
+    if (stream) {
+      if (!videoEl) {
+        videoEl = doc.createElement('video');
+        videoEl.id = 'lr-camera-video';
+        videoEl.autoplay = true;
+        videoEl.muted = true;
+        videoEl.playsInline = true;
+        videoEl.setAttribute('playsinline', '');
+        videoEl.setAttribute('muted', '');
+        // Match #camera-feed exactly so the layout does not shift.
+        videoEl.style.cssText =
+          'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;z-index:1;';
+        stage.appendChild(videoEl);
+      }
+      if (videoEl.srcObject !== stream) {
+        videoEl.srcObject = stream;
+        const played = videoEl.play();
+        if (played && typeof played.catch === 'function') played.catch(function () {});
+      }
+      if (feed) feed.style.display = 'none';
+      stage.classList.add('has-frame');
+      return;
+    }
+    if (videoEl) {
+      try { videoEl.srcObject = null; } catch (err) { /* detaching is best effort */ }
+      if (videoEl.parentNode) videoEl.parentNode.removeChild(videoEl);
+      videoEl = null;
+      if (feed) feed.style.display = '';
+    }
+  }
+
   function boot() {
     if (!engine) return;
     if (typeof engine.onChange === 'function') {
@@ -1139,6 +1200,8 @@ export function createStaticApp(options) {
       }
     }
     applySpeed();
+    // Independent of the panel: video must still appear with ?controls=0.
+    if (typeof win.setInterval === 'function') win.setInterval(syncCameraVideo, REFRESH_MS);
     if (startup.mode === 'demo') startDemo();
     else if (startup.mode === 'live' && startup.bridge) engageBridge(startup.bridge, false);
     // Cloud mode resumes on the refresh token connect-auth already persisted;

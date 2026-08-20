@@ -273,31 +273,42 @@ printer is running. If they do not match, the file-derived rows above will be
 confidently wrong. Drop the file for the job that is printing, and drop the new
 one when the job changes.
 
-### Why there is no camera in cloud mode
+### Camera in cloud mode
 
-There is no camera in cloud mode. This is a hard limit, not an unfinished
-feature.
+Cloud mode can show live video, with no server, when the camera streams over
+WebRTC through Prusa Connect. Paste the camera token from the Connect camera
+page into the optional third field and the page negotiates a peer connection
+directly with the camera. Requirements:
 
-- A LAN camera feed is RTSP, and a browser cannot speak RTSP. A page has no raw
-  socket API at all, only the fetch and WebSocket abstractions the browser
-  offers. WebAssembly does not change this: it runs inside the same sandbox and
-  reaches the network through the same JavaScript APIs, so an RTSP client
-  compiled to WebAssembly still has no socket to open. Transcoding RTSP is
-  precisely what LayerRelay's server is for.
-- Prusa Connect does keep camera stills, but its REST API is closed to browsers
-  on other origins. A preflight to those paths answers 404 with no CORS headers,
-  so an `Authorization` header can never be sent, and passing a valid token in
-  the query string is answered with 401. Both were measured against the live
-  service with a working token, so this is a confirmed negative rather than an
-  assumption.
-- Prusa's camera WebRTC configuration endpoint is open to other origins and does
-  return connection parameters. The signaling path it points at was never
-  exercised, so nothing here claims a browser can obtain a stream through it. It
-  is mentioned only so the point above is not read as a complete survey. Cloud
-  mode has no camera.
+- Camera firmware 3.1.3 or newer, and a `WebRtc` entry in the camera's feature
+  list as Connect reports it.
+- The camera set to WebRTC streaming in Prusa Connect. A camera left in RTSP
+  mode never answers the request, and the page says so after fifteen seconds
+  rather than spinning.
 
-The camera and nozzle panels therefore report the same disabled state they do in
-the demo and file modes.
+**Switching a camera to WebRTC turns its RTSP server off.** The two are mutually
+exclusive: the same Connect setting that enables one disables the other. Anyone
+feeding OBS, ffmpeg, or LayerRelay's own relay from `rtsp://` will lose that feed
+the moment they switch. This page never changes the setting; it only ever asks an
+already-streaming camera for video. Choosing the mode is done in Prusa Connect.
+
+What is still impossible is reaching the camera's RTSP stream from the page
+directly. A browser has no raw socket API, only fetch, WebSocket, WebRTC, and
+WebTransport. WebAssembly does not change that: it runs inside the same sandbox
+and reaches the network through the same JavaScript APIs, so an RTSP client
+compiled to WebAssembly still has no socket to open. Raw TCP does exist on the
+web platform as the Direct Sockets API, but it is restricted to Isolated Web
+Apps and is not available to an ordinary page. WebRTC works precisely because the
+browser speaks it natively.
+
+Prusa's stored camera stills remain unreachable for the same reason the rest of
+its REST API is: a preflight to those paths answers 404 with no CORS headers, so
+an `Authorization` header can never be sent, and a valid token in the query
+string is answered with 401. Both were measured against the live service with a
+working token.
+
+Without a camera token the camera and nozzle panels report the same disabled
+state they do in the demo and file modes.
 
 ### When the token chain breaks
 
