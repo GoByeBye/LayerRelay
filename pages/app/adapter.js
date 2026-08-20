@@ -4,18 +4,21 @@
  *
  * Added 2026-08-19 for the static GitHub Pages build: window.fetch shim that
  * routes /api/* requests to the in-browser state engine, plus the injected
- * control panel (Demo / Your file / Live server). Visual language mirrors
- * public/overlay.html. See NOTICE.md and docs/static-hosting.md.
+ * control panel (Demo / Your file / Live server / Prusa Connect). Visual
+ * language mirrors public/overlay.html. See NOTICE.md and
+ * docs/static-hosting.md.
  */
 // Browser ESM. No Node APIs, no frameworks, no npm deps. Nothing in this module
 // touches the DOM (or window) at evaluation time: every access lives inside a
 // function so pages/app/main.mjs can install the fetch shim synchronously
 // before overlay.html's inline script issues its first /api/state poll.
 
+import { CLOUD_PRINTER_KEY, normalizeConnectPrinterId } from './state-engine.mjs';
+
 const MODE_KEY = 'layer-relay.static.mode';
 const BRIDGE_KEY = 'layer-relay.static.bridge';
 const SPEED_KEY = 'layer-relay.static.speed';
-const MODES = ['demo', 'file', 'live'];
+const MODES = ['demo', 'file', 'live', 'cloud'];
 const SPEEDS = [1, 10, 60, 300];
 const DEFAULT_SPEED = 60;
 // Relative on purpose: must resolve under a GitHub Pages project subpath
@@ -23,6 +26,7 @@ const DEFAULT_SPEED = 60;
 const DEMO_ASSET_URL = 'demo.bgcode';
 const SOURCE_URL = 'https://github.com/GoByeBye/LayerRelay';
 const DOCS_URL = 'https://github.com/GoByeBye/LayerRelay/blob/master/docs/static-hosting.md';
+const CONNECT_DOCS_URL = 'https://github.com/GoByeBye/LayerRelay/blob/master/docs/prusa-connect.md';
 const IDLE_HIDE_MS = 3500;           // mirror overlay.html scheduleControlsIdle default
 const IDLE_LEAVE_MS = 2500;          // mirror overlay.html pointerleave delay
 const IDLE_FIRST_MS = 5000;          // first-visit grace so the panel is discoverable
@@ -84,6 +88,16 @@ export function normalizeBridge(value) {
   return url.origin;
 }
 
+// Non-throwing wrapper around the engine's topic-safe printer id check.
+export function normalizePrinterId(value) {
+  if (typeof value !== 'string' && typeof value !== 'number') return null;
+  try {
+    return normalizeConnectPrinterId(value);
+  } catch (err) {
+    return null;
+  }
+}
+
 function parseSpeed(value) {
   if (value == null) return null;
   const n = Number(String(value).trim().replace(/x$/i, ''));
@@ -109,7 +123,12 @@ export function resolveStartup(win) {
   const storedSpeed = parseSpeed(storageGet(w, SPEED_KEY));
   const speed = paramSpeed != null ? paramSpeed : (storedSpeed != null ? storedSpeed : DEFAULT_SPEED);
   const controlsEnabled = queryFlag(params, 'controls') !== false;
-  return { mode, bridge, speed, controlsEnabled };
+  // Only the printer id is ever accepted from the URL or restored from
+  // storage. A refresh token is typed in by hand every time it changes and is
+  // handed straight to the engine; this module never stores or reads one.
+  const printerId = normalizePrinterId(params.get('printer')) ||
+    normalizePrinterId(storageGet(w, CLOUD_PRINTER_KEY)) || '';
+  return { mode, bridge, speed, controlsEnabled, printerId };
 }
 
 // ---- fetch shim --------------------------------------------------------------
@@ -177,9 +196,11 @@ const PANEL_CSS = [
   '.lr-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }',
   ".lr-kicker { font: 700 10px 'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace; letter-spacing: 0.12em; color: #9fa6b1; }",
   '.lr-dot { width: 7px; height: 7px; border-radius: 50%; background: #35c46a; box-shadow: 0 0 0 4px rgba(53, 196, 106, 0.13); }',
-  '.lr-modes { display: flex; gap: 6px; }',
+  // Four modes wrap to a 2x2 grid rather than squeezing "Prusa Connect" onto
+  // two lines inside a quarter-width pill.
+  '.lr-modes { display: flex; flex-wrap: wrap; gap: 6px; }',
   '.lr-mode {',
-  '  flex: 1 1 0; padding: 7px 4px; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 8px;',
+  '  flex: 1 1 calc(50% - 3px); padding: 7px 4px; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 8px;',
   '  background: rgba(255, 255, 255, 0.07); color: #dfe3e9;',
   '  font-family: inherit; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; cursor: pointer;',
   '}',
@@ -225,6 +246,22 @@ const PANEL_CSS = [
   '}',
   '.lr-btn:hover, .lr-btn:focus-visible { background: rgba(255, 255, 255, 0.14); outline: none; }',
   '.lr-btn:disabled { opacity: 0.42; cursor: default; }',
+  '.lr-field { margin-top: 9px; }',
+  '.lr-field:first-child { margin-top: 0; }',
+  '.lr-field .lr-input { display: block; width: 100%; margin-top: 5px; }',
+  '.lr-cloud-row { display: flex; justify-content: flex-end; margin-top: 9px; }',
+  '.lr-warn {',
+  '  margin: 11px 0 0; padding: 9px 10px;',
+  '  border: 1px solid rgba(255, 138, 61, 0.42); border-radius: 9px;',
+  '  background: rgba(255, 138, 61, 0.12); color: #f3d7c2;',
+  '  font-size: 10px; line-height: 1.5;',
+  '}',
+  '.lr-warn strong {',
+  "  display: block; margin-bottom: 3px; color: #ffb27a;",
+  "  font: 700 10px 'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace; letter-spacing: 0.1em;",
+  '}',
+  '.lr-warn a { color: #ffd9bd; text-decoration: underline; text-underline-offset: 2px; }',
+  '.lr-warn a:hover, .lr-warn a:focus-visible { color: #fff; outline: none; }',
   '.lr-note { margin: 9px 0 0; color: #858d99; font-size: 10px; line-height: 1.45; }',
   ".lr-note code { font-family: 'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace; font-size: 9px; color: #c8ced7; }",
   '.lr-note a, .lr-foot a { color: #c8ced7; text-decoration: underline; text-underline-offset: 2px; }',
@@ -277,6 +314,10 @@ export function createStaticApp(options) {
     demo: { phase: 'idle', error: null },   // idle | loading | ready | error
     file: null,                             // null | {name, phase, error}
     live: { phase: 'idle', origin: '', detail: '' },
+    // idle | invalid | starting | engaged | error. The live link's own progress
+    // is read from engine.getStatus().cloud, never mirrored here.
+    cloud: { phase: 'idle', detail: '' },
+    printerId: startup.printerId,
     assumedPlaying: true,                // fallback when getStatus() lacks a playing flag
   };
   let refs = null;
@@ -284,6 +325,7 @@ export function createStaticApp(options) {
   let demoSeq = 0;
   let fileSeq = 0;
   let probeSeq = 0;
+  let cloudSeq = 0;
   let idleTimer = null;
   let interacting = false;
   let lastReveal = 0;
@@ -378,10 +420,14 @@ export function createStaticApp(options) {
       refreshIfMounted();
       return;
     }
+    // A file dropped during cloud mode is the analysis that fills in what MQTT
+    // never publishes, not a replay source, so cloud mode must survive it.
+    const keepCloud = state.engineMode === 'cloud';
     const seq = ++fileSeq;
     demoSeq += 1;
     probeSeq += 1;
-    state.engineMode = 'file';
+    if (!keepCloud) cloudSeq += 1;
+    state.engineMode = keepCloud ? 'cloud' : 'file';
     clearBridgeBase();
     let record = { name: name, phase: 'reading', error: null };
     state.file = record;
@@ -406,7 +452,7 @@ export function createStaticApp(options) {
         if (seq !== fileSeq) { dropSuperseded(); return; }
         state.file = { name: name, phase: 'ready', error: null };
         state.assumedPlaying = true;
-        storageSet(win, MODE_KEY, 'file');
+        storageSet(win, MODE_KEY, keepCloud ? 'cloud' : 'file');
         applySpeed();
         refreshIfMounted();
       })
@@ -482,6 +528,56 @@ export function createStaticApp(options) {
     engageBridge(origin, true);
   }
 
+  // Engages cloud mode. The refresh token is read once out of the field,
+  // handed to the engine, and the field is wiped in the same turn: it is never
+  // stored here and never rendered back into the DOM.
+  function connectCloud(rawPrinterId, rawToken) {
+    if (!engine || typeof engine.setModeCloud !== 'function') {
+      state.cloud = { phase: 'error', detail: 'engine unavailable' };
+      refreshIfMounted();
+      return;
+    }
+    const printerId = normalizePrinterId(rawPrinterId);
+    if (!printerId) {
+      state.cloud = {
+        phase: 'invalid',
+        detail: 'Enter the printer ID from Prusa Connect: 8 to 64 letters, digits, dashes, or underscores.',
+      };
+      refreshIfMounted();
+      return;
+    }
+    const token = String(rawToken == null ? '' : rawToken).trim();
+    if (refs) refs.tokenInput.value = '';
+    const seq = ++cloudSeq;
+    demoSeq += 1;
+    fileSeq += 1;
+    probeSeq += 1;
+    state.engineMode = 'cloud';
+    state.printerId = printerId;
+    clearBridgeBase();
+    if (refs) refs.printerInput.value = printerId;
+    state.cloud = { phase: 'starting', detail: '' };
+    storageSet(win, MODE_KEY, 'cloud');
+    const request = { printerUuid: printerId };
+    if (token) request.refreshToken = token;
+    let pending;
+    try {
+      pending = Promise.resolve(engine.setModeCloud(request));
+    } catch (err) {
+      pending = Promise.reject(err);
+    }
+    pending.then(function () {
+      if (seq !== cloudSeq) return;
+      state.cloud = { phase: 'engaged', detail: '' };
+      refreshIfMounted();
+    }, function (err) {
+      if (seq !== cloudSeq) return;
+      state.cloud = { phase: 'error', detail: messageOf(err) };
+      refreshIfMounted();
+    });
+    refreshIfMounted();
+  }
+
   function seekTo(value) {
     if (!engine || typeof engine.seekPct !== 'function') return;
     const pct = Number(value);
@@ -519,9 +615,11 @@ export function createStaticApp(options) {
       }
     } else if (mode === 'live' && refs && state.bridge && !refs.bridgeInput.value) {
       refs.bridgeInput.value = state.bridge;
+    } else if (mode === 'cloud' && refs && state.printerId && !refs.printerInput.value) {
+      refs.printerInput.value = state.printerId;
     }
-    // 'file' and 'live' persist on successful load / connect, not on tab click,
-    // so a reload never lands on a data source that cannot be restored.
+    // 'file', 'live' and 'cloud' persist on successful load / connect, not on
+    // tab click, so a reload never lands on a source that cannot be restored.
     refreshPanel();
   }
 
@@ -546,7 +644,8 @@ export function createStaticApp(options) {
 
     const modes = makeEl(doc, 'div', 'lr-modes');
     built.modeButtons = {};
-    const defs = [['demo', 'Demo'], ['file', 'Your file'], ['live', 'Live server']];
+    const defs = [['demo', 'Demo'], ['file', 'Your file'], ['live', 'Live server'],
+      ['cloud', 'Prusa Connect']];
     for (let i = 0; i < defs.length; i += 1) {
       const button = makeEl(doc, 'button', 'lr-mode', defs[i][1]);
       button.type = 'button';
@@ -606,6 +705,66 @@ export function createStaticApp(options) {
     note.appendChild(doc.createTextNode('.'));
     built.liveSection.appendChild(note);
     card.appendChild(built.liveSection);
+
+    built.cloudSection = makeEl(doc, 'div', 'lr-section');
+    const printerField = makeEl(doc, 'div', 'lr-field');
+    const printerLabel = makeEl(doc, 'label', 'lr-label', 'Printer ID');
+    printerLabel.setAttribute('for', 'lr-connect-printer');
+    printerField.appendChild(printerLabel);
+    built.printerInput = makeEl(doc, 'input', 'lr-input');
+    built.printerInput.type = 'text';
+    built.printerInput.id = 'lr-connect-printer';
+    built.printerInput.setAttribute('placeholder', 'printer id from Prusa Connect');
+    built.printerInput.setAttribute('autocomplete', 'off');
+    built.printerInput.setAttribute('spellcheck', 'false');
+    printerField.appendChild(built.printerInput);
+    built.cloudSection.appendChild(printerField);
+
+    const tokenField = makeEl(doc, 'div', 'lr-field');
+    const tokenLabel = makeEl(doc, 'label', 'lr-label', 'Refresh token');
+    tokenLabel.setAttribute('for', 'lr-connect-token');
+    tokenField.appendChild(tokenLabel);
+    built.tokenInput = makeEl(doc, 'input', 'lr-input');
+    // Never a readable field, never repopulated: once handed to the engine the
+    // value is wiped and only connect-auth's storage holds the chain.
+    built.tokenInput.type = 'password';
+    built.tokenInput.id = 'lr-connect-token';
+    built.tokenInput.setAttribute('placeholder', 'paste once, or leave blank to reuse');
+    built.tokenInput.setAttribute('autocomplete', 'off');
+    built.tokenInput.setAttribute('spellcheck', 'false');
+    tokenField.appendChild(built.tokenInput);
+    built.cloudSection.appendChild(tokenField);
+
+    const cloudRow = makeEl(doc, 'div', 'lr-cloud-row');
+    built.cloudBtn = makeEl(doc, 'button', 'lr-btn', 'Connect');
+    built.cloudBtn.type = 'button';
+    cloudRow.appendChild(built.cloudBtn);
+    built.cloudSection.appendChild(cloudRow);
+
+    built.cloudStatus = makeStatusLine(doc, 'lr-cloud-status');
+    built.cloudSection.appendChild(built.cloudStatus);
+
+    const warn = makeEl(doc, 'div', 'lr-warn');
+    warn.setAttribute('role', 'note');
+    warn.appendChild(makeEl(doc, 'strong', '', 'ONE TOKEN CHAIN, ONE CONSUMER'));
+    warn.appendChild(doc.createTextNode(
+      'Prusa rotates the refresh token every single time it is used. Do not connect here while ' +
+      'a LayerRelay server, or a second tab of this page, uses the same token: whichever one ' +
+      'loses the race ends up with a dead chain and you have to capture a new token by hand. '));
+    warn.appendChild(makeLink(doc, 'How to capture a token', CONNECT_DOCS_URL));
+    warn.appendChild(doc.createTextNode('.'));
+    built.cloudSection.appendChild(warn);
+
+    const cloudNote = makeEl(doc, 'p', 'lr-note');
+    cloudNote.appendChild(doc.createTextNode(
+      'The token stays in this browser and is sent only to '));
+    cloudNote.appendChild(makeEl(doc, 'code', '', 'account.prusa3d.com'));
+    cloudNote.appendChild(doc.createTextNode(
+      '. This page has no backend. Live telemetry covers state, progress, temperatures, ' +
+      'the active tool and Z; drop the printing .bgcode for the job name, thumbnail, layers ' +
+      'and swap map. There is no camera in cloud mode.'));
+    built.cloudSection.appendChild(cloudNote);
+    card.appendChild(built.cloudSection);
 
     built.replay = makeEl(doc, 'div', 'lr-replay');
     const replayRow = makeEl(doc, 'div', 'lr-replay-row');
@@ -695,6 +854,17 @@ export function createStaticApp(options) {
         connectLive(refs.bridgeInput.value);
       }
     });
+    function submitCloud() {
+      connectCloud(refs.printerInput.value, refs.tokenInput.value);
+    }
+    refs.cloudBtn.addEventListener('click', submitCloud);
+    for (const field of [refs.printerInput, refs.tokenInput]) {
+      field.addEventListener('keydown', function (event) {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        submitCloud();
+      });
+    }
     refs.playBtn.addEventListener('click', togglePlay);
     refs.speedSel.addEventListener('change', function () {
       const value = Number(refs.speedSel.value);
@@ -764,6 +934,8 @@ export function createStaticApp(options) {
       refs.panel.classList.remove('lr-dropping');
       const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
       if (file) {
+        // In cloud mode the file feeds the live card; the file tab is still
+        // where its decode progress belongs.
         state.section = 'file';
         loadLocalFile(file);
       }
@@ -792,12 +964,46 @@ export function createStaticApp(options) {
   function fileStatusText(analyzing) {
     if (!engine) return ['Engine unavailable.', true];
     const f = state.file;
-    if (!f) return ['Drop a .bgcode or .gcode file anywhere on this page, or click to browse.', false];
+    if (!f) {
+      return state.engineMode === 'cloud'
+        ? ['Drop the .bgcode that is printing to add the job name, thumbnail, layers, and swap map.', false]
+        : ['Drop a .bgcode or .gcode file anywhere on this page, or click to browse.', false];
+    }
     if (f.phase === 'error') return ['Could not decode ' + f.name + ': ' + f.error, true];
     if (f.phase === 'reading') return ['Reading ' + f.name + '…', false];
     if (f.phase === 'decoding') return ['Analyzing ' + f.name + '…', false];
-    if (analyzing && state.engineMode === 'file') return ['Analyzing ' + f.name + '…', false];
+    if (analyzing && (state.engineMode === 'file' || state.engineMode === 'cloud')) {
+      return ['Analyzing ' + f.name + '…', false];
+    }
+    if (state.engineMode === 'cloud') return ['Merging ' + f.name + ' into the live Connect data.', false];
     return ['Loaded ' + f.name + '.', false];
+  }
+
+  function cloudStatusText(status) {
+    if (!engine) return ['Engine unavailable.', true];
+    const local = state.cloud;
+    if (local.phase === 'invalid') return [local.detail, true];
+    if (local.phase === 'error') return ['Prusa Connect failed: ' + local.detail, true];
+    const cloud = status && status.cloud;
+    if (!cloud) {
+      if (local.phase === 'starting') return ['Starting Prusa Connect…', false];
+      return ['Enter the printer ID and paste a Prusa Connect refresh token.', false];
+    }
+    if (cloud.phase === 'error') {
+      return [cloud.error || 'The Prusa Connect link failed.', true];
+    }
+    if (cloud.phase === 'retrying') {
+      const seconds = Math.max(1, Math.ceil((cloud.retryInMs || 0) / 1000));
+      return [(cloud.error || 'Link lost.') + ' Reconnecting in ' + seconds + 's.', true];
+    }
+    if (cloud.phase === 'live') {
+      const topics = cloud.topics + (cloud.topics === 1 ? ' topic' : ' topics');
+      const tail = state.file && state.file.phase === 'ready'
+        ? '' : ' Drop the printing .bgcode to fill in layers and swaps.';
+      return ['Live: ' + topics + ' from ' + cloud.printerUuid + '.' + tail, false];
+    }
+    if (cloud.phase === 'connecting') return ['Connecting to Prusa Connect…', false];
+    return ['Not connected.', false];
   }
 
   function liveStatusText() {
@@ -838,7 +1044,9 @@ export function createStaticApp(options) {
     refs.demoSection.hidden = state.section !== 'demo';
     refs.fileSection.hidden = state.section !== 'file';
     refs.liveSection.hidden = state.section !== 'live';
-    refs.replay.hidden = state.section === 'live';
+    refs.cloudSection.hidden = state.section !== 'cloud';
+    refs.replay.hidden = state.section === 'live' || state.section === 'cloud' ||
+      state.engineMode === 'cloud';
 
     const demoText = demoStatusText(analyzing);
     setStatus(refs.demoStatus, demoText[0], demoText[1]);
@@ -846,6 +1054,8 @@ export function createStaticApp(options) {
     setStatus(refs.fileStatus, fileText[0], fileText[1]);
     const liveText = liveStatusText();
     setStatus(refs.liveStatus, liveText[0], liveText[1]);
+    const cloudText = cloudStatusText(status);
+    setStatus(refs.cloudStatus, cloudText[0], cloudText[1]);
 
     const fileReady = !!(state.file && state.file.phase === 'ready');
     const replayReady = state.engineMode === 'demo' ? state.demo.phase === 'ready'
@@ -856,6 +1066,7 @@ export function createStaticApp(options) {
     refs.speedSel.disabled = !engine;
     refs.drop.disabled = !engine;
     refs.connectBtn.disabled = !engine;
+    refs.cloudBtn.disabled = !engine;
     refs.playBtn.textContent = pickPlaying(status) ? 'Pause' : 'Play';
 
     const progress = pickNumber(status, ['progressPct', 'progress', 'pct']);
@@ -869,7 +1080,8 @@ export function createStaticApp(options) {
       globalError = 'Static engine failed to start: ' + messageOf(engineError);
     } else if (statusError) {
       const sectionError = (state.section === 'demo' && state.demo.error) ||
-        (state.section === 'file' && state.file && state.file.error) || null;
+        (state.section === 'file' && state.file && state.file.error) ||
+        (state.section === 'cloud' && state.cloud.detail) || null;
       if (sectionError !== statusError) globalError = statusError;
     }
     refs.errorLine.hidden = !globalError;
@@ -893,8 +1105,14 @@ export function createStaticApp(options) {
     applySpeed();
     if (startup.mode === 'demo') startDemo();
     else if (startup.mode === 'live' && startup.bridge) engageBridge(startup.bridge, false);
-    // 'file' (and live-without-bridge) wait for user input; the overlay shows
-    // its own offline shell until then.
+    // Cloud mode resumes on the refresh token connect-auth already persisted;
+    // no token is passed here, so nothing is read out of storage by this
+    // module. A chain that died surfaces the engine's invalid_grant message.
+    else if (startup.mode === 'cloud' && startup.printerId) {
+      connectCloud(startup.printerId, '');
+    }
+    // 'file' (and live/cloud without a saved target) wait for user input; the
+    // overlay shows its own offline shell until then.
   }
 
   function mountPanel() {
@@ -908,6 +1126,7 @@ export function createStaticApp(options) {
     doc.head.appendChild(style);
     refs = buildPanel(doc);
     if (state.bridge) refs.bridgeInput.value = state.bridge;
+    if (state.printerId) refs.printerInput.value = state.printerId;
     wirePanel(doc);
     doc.body.appendChild(refs.panel);
     if (state.engineMode === 'live' && state.live.phase === 'set') probeBridge(state.live.origin);

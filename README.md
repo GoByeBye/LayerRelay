@@ -197,14 +197,26 @@ The repository also builds a static version of the overlay that runs entirely
 in the browser and needs no server of its own. A dedicated workflow builds
 `dist/pages` with Bun and deploys it to GitHub Pages on every push to `master`,
 once **Settings > Pages > Source** is set to **GitHub Actions**. The published
-page has three modes: a generated demo print, local analysis of a dropped
-`.bgcode` or `.gcode` file, and an optional live bridge to a LayerRelay server
-you run. Decoding, timelines, thumbnails, and filament search all run
-in-browser, and a dropped file never leaves the machine. Browsers cannot poll
-PrusaLink directly because the printer firmware sends no CORS headers, so live
-telemetry always goes through a LayerRelay server with `apiReadAllowedOrigins`
-configured. Setup, browser permissions, and the security boundaries are
-documented in [docs/static-hosting.md](docs/static-hosting.md).
+page has four modes: a generated demo print, local analysis of a dropped
+`.bgcode` or `.gcode` file, an optional live bridge to a LayerRelay server you
+run, and a cloud mode that reads Prusa Connect directly. Decoding, timelines,
+thumbnails, and filament search all run in-browser, and a dropped file never
+leaves the machine. Browsers cannot poll PrusaLink directly because the printer
+firmware sends no CORS headers, so bridge telemetry goes through a LayerRelay
+server with `apiReadAllowedOrigins` configured.
+
+Cloud mode needs no server at all. The browser refreshes an access token against
+`account.prusa3d.com` with a refresh token the printer owner captures from their
+own Prusa Connect session, then subscribes to that printer's retained telemetry
+topics on Prusa's MQTT broker over a WebSocket. The refresh token stays in that
+browser and is sent nowhere but Prusa's account service. That supplies
+temperatures, state, progress, remaining time, Z height, the active tool, and
+the activity dialog; the thumbnail, layer, swap, and waste timelines come from a
+`.bgcode` dropped onto the page, and there is no camera. A refresh-token chain
+must have exactly one consumer, so never share one between cloud mode and a
+running LayerRelay server. Setup, the full field list, browser permissions, and
+the security boundaries are documented in
+[docs/static-hosting.md](docs/static-hosting.md).
 
 ## How the tool and layer timeline works
 
@@ -246,7 +258,7 @@ not an extrusion timeline.
 | `tool-settings.js` | Validated, immediately applied tool inventory persisted under `DATA_DIR` |
 | `openprinttag-index.js` | Startup-refreshed local suggestion index derived from the public OpenPrintTag material and brand snapshots |
 | `public/overlay.html` | Self-contained overlay UI; browser requests remain same-origin |
-| `pages/` | Browser ESM ports of the decoder, timelines, and a virtual `/api` engine for the static GitHub Pages build |
+| `pages/` | Browser ESM ports of the decoder, timelines, a virtual `/api` engine, and a dependency-free Prusa Connect MQTT client for the static GitHub Pages build |
 | `scripts/build-pages.mjs` | Builds the static dashboard into `dist/pages`: transformed overlay, bundled browser code, and a generated demo `.bgcode` |
 | `tools/` | Guarded restart, camera snapshot, and Connect token-display helpers |
 

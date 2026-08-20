@@ -4,13 +4,15 @@
  *
  * Virtual /api/* server for the static dashboard build. Serves the exact
  * response shapes of server.js (state, jobmap, thumbnail, settings,
- * filaments) from an in-browser replay of a decoded G-code file, or
- * forwards to a user-provided LayerRelay bridge in live mode.
+ * filaments) from an in-browser replay of a decoded G-code file, from live
+ * Prusa Connect MQTT telemetry in cloud mode, or by forwarding to a
+ * user-provided LayerRelay bridge in live mode.
  */
 // Browser ESM. The only I/O is through the injected fetch implementation
-// (demo asset load and live-mode forwarding) and localStorage via the
-// injected stores; everything else is computed locally.
-import { analyzeBgcode } from './toolswaps.mjs';
+// (demo asset load and live-mode forwarding), the MQTT WebSocket in cloud
+// mode, and localStorage via the injected stores; everything else is
+// computed locally.
+import { analyzeBgcode, mapLive, materialFor } from './toolswaps.mjs';
 import { extractThumbnails, isBgcode } from './bgcode.mjs';
 import { decodeQoi } from './qoi.mjs';
 import { preferredPrintName } from './print-name.mjs';
@@ -43,6 +45,65 @@ const DISABLED_STREAM_STATUS = Object.freeze({
   restartInMs: null,
   error: null,
 });
+
+// ---- cloud (Prusa Connect over MQTT) constants --------------------------------
+
+// Verified reachable from a foreign origin: WebSocket handshakes are exempt
+// from CORS, and the broker accepts MQTT 3.1.1 with the Prusa account id as
+// username and an OAuth access token as password.
+export const CLOUD_MQTT_URL = 'wss://mqtt.prusa3d.com:8084/mqtt';
+// Only the per-printer tree is granted; a subscribe to v1/devices/# is denied.
+const CLOUD_TOPIC_ROOT = 'v1/devices/printers/';
+const CLOUD_TOPIC_PREFIX = /^v1\/devices\/printers\/[^/]+\//;
+// Printer id only. The refresh token lives in connect-auth's own key and is
+// never written, read, or rendered by the engine.
+export const CLOUD_PRINTER_KEY = 'layer-relay.static.cloud.printer';
+const CLOUD_BACKOFF_MIN_MS = 2000;
+const CLOUD_BACKOFF_MAX_MS = 30000;
+// A CONNACK/SUBACK that never arrives must not wedge the link forever.
+const CLOUD_CONNECT_TIMEOUT_MS = 20000;
+const CLOUD_CAMERA_REASON = 'no camera in cloud mode';
+
+// Retrying any of these only burns the token chain further, so cloud mode
+// stops on them. The engine surfaces its own wording rather than the thrown
+// message: this text reaches the DOM and /api/state, and a curated string
+// cannot accidentally carry a token from a collaborator's error.
+const CLOUD_TERMINAL_MESSAGES = {
+  invalid_grant: 'Prusa rejected the stored refresh token (invalid_grant). A refresh token ' +
+    'can be spent only once, so something else spent it: a running LayerRelay server, ' +
+    'another tab, or an interrupted refresh. Capture a fresh token as described in ' +
+    'docs/prusa-connect.md and paste it in again.',
+  not_configured: 'No Prusa refresh token is stored in this browser. Paste a refresh token ' +
+    'and a printer id to start cloud mode: see docs/prusa-connect.md.',
+  storage: 'This browser refused to store the rotated Prusa refresh token, so cloud mode ' +
+    'cannot run safely: a token that rotates without being saved kills the chain. Allow ' +
+    'site data for this page, then connect again.',
+};
+
+// Printer ids go straight into an MQTT topic filter, so anything that could
+// change the filter's meaning (slash, wildcard, whitespace) is rejected.
+export function normalizeConnectPrinterId(value) {
+  const raw = String(value == null ? '' : value).trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$/.test(raw)) {
+    throw new TypeError(
+      'printer id must be 8 to 64 characters of letters, digits, dash, or underscore');
+  }
+  return raw;
+}
+
+function cloudError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+const round1 = (value) => (value == null || !Number.isFinite(value)
+  ? null : Math.round(value * 10) / 10);
+
+function finiteOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
 
 function abortError() {
   if (typeof DOMException === 'function') {
@@ -180,6 +241,57 @@ export function createEngine(options = {}) {
     createBrowserToolSettingsStore(undefined, options.storage);
   let filamentIndex = options.filamentIndex || null;
 
+  // Cloud mode collaborators. Every one is injectable so the engine can be
+  // driven by fakes with no network and no dependency on the real modules;
+  // the defaults import them lazily, so nothing is loaded (or bundled into
+  // the startup path) until cloud mode is actually engaged.
+  const authFactory = options.authFactory || (async (config) => {
+    const module = await import('./connect-auth.mjs');
+    return module.createConnectAuth(config);
+  });
+  const mqttFactory = options.mqttFactory || (async (config) => {
+    const module = await import('./mqtt.mjs');
+    return module.createMqttClient(config);
+  });
+  const connectStateFactory = options.connectStateFactory || (async () => {
+    const module = await import('./connect-live.mjs');
+    return module.createConnectState();
+  });
+  const setTimer = options.setTimeoutImpl ||
+    ((fn, ms) => (typeof setTimeout === 'function' ? setTimeout(fn, ms) : null));
+  const clearTimer = options.clearTimeoutImpl ||
+    ((id) => { if (typeof clearTimeout === 'function') clearTimeout(id); });
+  const makeClientId = options.clientIdFactory || (() => {
+    let suffix = '';
+    try {
+      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        suffix = crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+      }
+    } catch { suffix = ''; }
+    if (!suffix) suffix = Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
+    return `lr-static-${suffix}`;
+  });
+
+  function storageRef() {
+    if (options.storage !== undefined) return options.storage;
+    try { return typeof localStorage === 'undefined' ? null : localStorage; }
+    catch { return null; }
+  }
+
+  function storageRead(key) {
+    const store = storageRef();
+    if (!store || typeof store.getItem !== 'function') return null;
+    try { return store.getItem(key); }
+    catch { return null; }
+  }
+
+  function storageWrite(key, value) {
+    const store = storageRef();
+    if (!store || typeof store.setItem !== 'function') return;
+    try { store.setItem(key, value); }
+    catch { /* quota or private mode: persistence is best effort */ }
+  }
+
   let mode = 'demo';
   let bridge = null;
   let analysis = null;
@@ -194,6 +306,33 @@ export function createEngine(options = {}) {
   let completedJob = null;
   let timelapseIntervalSec = 10;
   let loadSeq = 0;
+
+  // Cloud mode runtime. cloudSeq is the epoch guard: every teardown and every
+  // fresh setModeCloud bumps it, and each await boundary in the connect path
+  // bails when it moved, so a late-resolving token refresh can never open a
+  // socket for a mode the user already left.
+  let cloudSeq = 0;
+  let cloudAuth = null;
+  let cloudLive = null;         // connect-live topic mapper
+  let cloudClient = null;       // MQTT client
+  let cloudPrinterId = null;
+  let cloudPhase = 'idle';      // idle | connecting | live | retrying | error
+  let cloudFailure = null;      // last surfaced cloud error message
+  let cloudFatal = false;       // terminal invalid_grant: no more attempts
+  let cloudAttempt = 0;
+  let cloudRetryAt = null;
+  let cloudRetryTimer = null;
+  let cloudConnectTimer = null;
+  let cloudLastMessageAt = null;
+  let cloudAnchorAt = null;     // when the current attempt started
+  let cloudMessages = 0;
+  let cloudUserId = null;
+  // One attempt can only fail once. A dying MQTT client emits `error` and then
+  // `close` for a single fault, and closing it from the failure path can emit
+  // `close` again, so without this latch one drop would advance the backoff
+  // two or three steps and could leave a second reconnect timer running.
+  let cloudAttemptSettled = false;
+  const cloudTopics = new Set();
 
   // Replay clock: playedSec advances from the injected wall clock only while
   // playing, scaled by the speed multiplier. Deterministic under a fake now().
@@ -220,11 +359,24 @@ export function createEngine(options = {}) {
     wallBase = now();
   }
 
+  function cloudJobId() {
+    if (!cloudLive) return null;
+    try {
+      const value = cloudLive.jobId;
+      return value == null || value === '' ? null : String(value);
+    } catch { return null; }
+  }
+
   function thumbnailKey() {
     // The load serial keeps the key unique per decoded file. Without it, a
     // second drop of a re-sliced file with the same name would leave the
     // overlay showing the previous thumbnail and swap ticks, because it
     // reloads both only when the key changes.
+    if (mode === 'cloud') {
+      // The printer's job id joins the key so the overlay reloads the
+      // thumbnail and the swap map when the printer moves to another job.
+      return `cloud::${cloudJobId() || '-'}::${loadSeq}::${fileName || '-'}`;
+    }
     return fileName ? `static::${loadSeq}::${fileName}` : 'x::';
   }
 
@@ -292,14 +444,21 @@ export function createEngine(options = {}) {
     }
   }
 
+  // A file dropped while cloud mode is running is not a replay source: it is
+  // the analysis that supplies the job name, thumbnail, layer and swap data
+  // MQTT never publishes. Loading one must therefore keep cloud mode running.
   async function loadFile(u8, name) {
-    mode = 'file';
+    if (mode !== 'cloud') {
+      teardownCloud();
+      mode = 'file';
+    }
     setApiBase('');
     const token = ++loadSeq;
     await applyBytes(u8, String(name || 'print.bgcode'), token);
   }
 
   async function setModeDemo(demoFileUrl) {
+    teardownCloud();
     mode = 'demo';
     setApiBase('');
     const token = ++loadSeq;
@@ -328,11 +487,273 @@ export function createEngine(options = {}) {
 
   function setBridge(baseUrl) {
     const origin = normalizeBridgeOrigin(baseUrl);
+    teardownCloud();
     bridge = origin;
     mode = 'live';
     setApiBase(origin);
     emit();
     return origin;
+  }
+
+  // ---- cloud mode: Prusa Connect telemetry over MQTT ---------------------------
+
+  function clearCloudTimers() {
+    if (cloudRetryTimer != null) { clearTimer(cloudRetryTimer); cloudRetryTimer = null; }
+    if (cloudConnectTimer != null) { clearTimer(cloudConnectTimer); cloudConnectTimer = null; }
+    cloudRetryAt = null;
+  }
+
+  function closeCloudClient() {
+    const client = cloudClient;
+    cloudClient = null;
+    if (client && typeof client.close === 'function') {
+      try { client.close(); } catch { /* already gone */ }
+    }
+  }
+
+  // Invalidates the current epoch, stops every timer, and drops the socket.
+  // Safe to call from any mode.
+  function teardownCloud() {
+    cloudSeq += 1;
+    clearCloudTimers();
+    closeCloudClient();
+    cloudPhase = 'idle';
+    cloudAnchorAt = null;
+  }
+
+  function storedPrinterId() {
+    const raw = storageRead(CLOUD_PRINTER_KEY);
+    if (!raw) return null;
+    try { return normalizeConnectPrinterId(raw); }
+    catch { return null; }
+  }
+
+  function backoffMs(attempt) {
+    const step = CLOUD_BACKOFF_MIN_MS * Math.pow(2, Math.max(0, attempt - 1));
+    return Math.min(CLOUD_BACKOFF_MAX_MS, step);
+  }
+
+  function markCloudLive(seq) {
+    if (seq !== cloudSeq) return;
+    if (cloudConnectTimer != null) { clearTimer(cloudConnectTimer); cloudConnectTimer = null; }
+    cloudRetryAt = null;
+    cloudAttempt = 0;
+    if (cloudPhase === 'live') return;
+    cloudPhase = 'live';
+    cloudFailure = null;
+    emit();
+  }
+
+  // Terminal failures (a dead token chain, nothing configured) must not spin a
+  // retry loop that burns the chain further; everything else backs off.
+  function cloudAttemptFailed(seq, error) {
+    if (seq !== cloudSeq || cloudAttemptSettled) return;
+    cloudAttemptSettled = true;
+    clearCloudTimers();
+    closeCloudClient();
+    const code = error && typeof error.code === 'string' ? error.code : null;
+    const terminal = CLOUD_TERMINAL_MESSAGES[code];
+    if (terminal) {
+      cloudFatal = true;
+      cloudPhase = 'error';
+      cloudFailure = terminal;
+      emit();
+      return;
+    }
+    cloudFailure = String((error && error.message) || error || 'connection lost');
+    cloudAttempt += 1;
+    const delay = backoffMs(cloudAttempt);
+    cloudPhase = 'retrying';
+    cloudRetryAt = now() + delay;
+    emit();
+    cloudRetryTimer = setTimer(() => {
+      cloudRetryTimer = null;
+      cloudRetryAt = null;
+      if (seq !== cloudSeq) return;
+      // connectCloud rejects only through cloudAttemptFailed, which is called
+      // inside it; the catch is belt and braces so a throw cannot escape into
+      // an unhandled rejection from a timer callback.
+      Promise.resolve(connectCloud(seq)).catch(() => {});
+    }, delay);
+  }
+
+  function onCloudMessage(seq, message) {
+    if (seq !== cloudSeq || !message || typeof message.topic !== 'string') return;
+    // createConnectState() takes no printer id, so stripping the per-printer
+    // prefix is the engine's job: the mapper only ever sees relative topics.
+    const topic = message.topic.replace(CLOUD_TOPIC_PREFIX, '');
+    try { cloudLive.apply(topic, message.payload); }
+    catch { return; } // one unmappable payload must not kill the link
+    cloudTopics.add(topic);
+    cloudMessages += 1;
+    cloudLastMessageAt = now();
+    if (cloudPhase !== 'live') markCloudLive(seq);
+  }
+
+  async function connectCloud(seq) {
+    if (seq !== cloudSeq || cloudFatal) return;
+    clearCloudTimers();
+    closeCloudClient();
+    cloudAttemptSettled = false;
+    cloudPhase = 'connecting';
+    cloudAnchorAt = now();
+    emit();
+
+    let accessToken;
+    let userId;
+    try {
+      // The access token is refreshed before every attempt, so a reconnect
+      // after a long outage never carries an expired one.
+      accessToken = await cloudAuth.getAccessToken();
+      if (seq !== cloudSeq) return;
+      // Held for the session: a 401 from the profile endpoint makes
+      // connect-auth drop the cached access token, so asking again on every
+      // reconnect would rotate the refresh token once per backoff cycle.
+      if (cloudUserId == null) {
+        cloudUserId = await cloudAuth.getUserId();
+        if (seq !== cloudSeq) return;
+      }
+      userId = cloudUserId;
+    } catch (error) {
+      cloudAttemptFailed(seq, error);
+      return;
+    }
+    if (!accessToken) {
+      cloudAttemptFailed(seq, cloudError('invalid_grant', 'no access token'));
+      return;
+    }
+
+    let client;
+    try {
+      client = await mqttFactory({
+        url: CLOUD_MQTT_URL,
+        clientId: makeClientId(),
+        username: String(userId == null ? '' : userId),
+        password: accessToken,
+        WebSocketImpl: options.WebSocketImpl,
+      });
+    } catch (error) {
+      cloudAttemptFailed(seq, error);
+      return;
+    }
+    if (seq !== cloudSeq) {
+      if (client && typeof client.close === 'function') {
+        try { client.close(); } catch { /* already gone */ }
+      }
+      return;
+    }
+    cloudClient = client;
+
+    const filter = `${CLOUD_TOPIC_ROOT}${cloudPrinterId}/#`;
+    client.on('connack', () => {
+      if (seq !== cloudSeq) return;
+      try { client.subscribe([filter]); }
+      catch (error) { cloudAttemptFailed(seq, error); }
+    });
+    client.on('suback', () => markCloudLive(seq));
+    client.on('message', (message) => onCloudMessage(seq, message));
+    client.on('close', () => cloudAttemptFailed(seq, new Error('MQTT link closed')));
+    client.on('error', (error) => cloudAttemptFailed(
+      seq, error instanceof Error ? error : new Error(String(error || 'MQTT error'))));
+
+    cloudConnectTimer = setTimer(() => {
+      cloudConnectTimer = null;
+      if (seq !== cloudSeq || cloudPhase === 'live') return;
+      cloudAttemptFailed(seq, new Error('no MQTT response within 20s'));
+    }, CLOUD_CONNECT_TIMEOUT_MS);
+
+    try { await client.connect(); }
+    catch (error) {
+      if (seq !== cloudSeq) return;
+      cloudAttemptFailed(seq, error);
+    }
+  }
+
+  // Engages cloud mode. Resolves once the first connection attempt has been
+  // started (or has failed); the link's own progress is reported through
+  // getStatus().cloud and /api/state, never through this promise.
+  async function setModeCloud(config = {}) {
+    const printerId = config && config.printerUuid != null && String(config.printerUuid).trim()
+      ? normalizeConnectPrinterId(config.printerUuid)
+      : storedPrinterId();
+    if (!printerId) {
+      throw cloudError('not_configured',
+        'a Prusa Connect printer id is required to start cloud mode');
+    }
+    const refreshToken = config && typeof config.refreshToken === 'string'
+      ? config.refreshToken.trim() : '';
+
+    teardownCloud();
+    const seq = cloudSeq;
+    mode = 'cloud';
+    setApiBase('');
+    bridge = null;
+    cloudPrinterId = printerId;
+    cloudFatal = false;
+    cloudFailure = null;
+    cloudAttempt = 0;
+    cloudMessages = 0;
+    cloudUserId = null;
+    cloudLastMessageAt = null;
+    cloudTopics.clear();
+    cloudPhase = 'connecting';
+    cloudAnchorAt = now();
+    storageWrite(CLOUD_PRINTER_KEY, printerId);
+    emit();
+
+    try {
+      cloudLive = await connectStateFactory();
+      if (seq !== cloudSeq) return;
+      cloudAuth = await authFactory({ storage: storageRef(), fetchImpl, now });
+      if (seq !== cloudSeq) return;
+    } catch (error) {
+      // A module that will not load will not load on the next attempt either.
+      if (seq !== cloudSeq) return;
+      cloudFatal = true;
+      cloudPhase = 'error';
+      cloudFailure = `cloud mode could not start: ${(error && error.message) || error}`;
+      emit();
+      return;
+    }
+
+    if (refreshToken) {
+      // Rejected outright rather than retried: a malformed token never becomes
+      // valid, and the caller shows the reason next to the field it came from.
+      try {
+        cloudAuth.configure({ refreshToken, printerUuid: printerId });
+      } catch (error) {
+        if (seq !== cloudSeq) return;
+        cloudFatal = true;
+        cloudPhase = 'error';
+        cloudFailure = String((error && error.message) || error);
+        emit();
+        throw error;
+      }
+    }
+    await connectCloud(seq);
+  }
+
+  function cloudSnapshot() {
+    if (!cloudLive || typeof cloudLive.snapshot !== 'function') return {};
+    try {
+      const snapshot = cloudLive.snapshot();
+      return snapshot && typeof snapshot === 'object' ? snapshot : {};
+    } catch { return {}; }
+  }
+
+  function cloudStatus() {
+    if (mode !== 'cloud') return null;
+    return {
+      phase: cloudPhase,
+      printerUuid: cloudPrinterId,
+      error: cloudFailure,
+      fatal: cloudFatal,
+      attempt: cloudAttempt,
+      topics: cloudTopics.size,
+      messages: cloudMessages,
+      lastMessageAt: cloudLastMessageAt,
+      retryInMs: cloudRetryAt == null ? null : Math.max(0, cloudRetryAt - now()),
+    };
   }
 
   function play() {
@@ -380,6 +801,7 @@ export function createEngine(options = {}) {
       analyzing,
       error: lastError,
       bridge,
+      cloud: cloudStatus(),
     };
   }
 
@@ -433,8 +855,8 @@ export function createEngine(options = {}) {
     return completedJob;
   }
 
-  function buildState() {
-    const base = replay ? replay.stateAt(playedSecNow()) : {
+  function idleBase() {
+    return {
       state: 'IDLE',
       progress: null,
       timeRemainingSec: null,
@@ -462,26 +884,94 @@ export function createEngine(options = {}) {
       wasteTotal: null,
       filamentG: null,
       swapping: false,
-      name: printName,
-    };
-    const view = toolSettingsView(base.toolLabel ?? undefined);
-    const out = {
-      ...base,
       activity: null,
       fanPrint: null,
-      online: true,
-      staleSec: 0,
+      // Placeholder so the cloud snapshot's data/online value has a slot to
+      // land in; the response envelope always recomputes it.
+      online: null,
+      name: printName,
+    };
+  }
+
+  // Copies only keys the target already declares, and only when the source
+  // actually set one. A plain spread would let an `undefined` erase a field
+  // (JSON.stringify then drops the key the overlay reads) and would leak the
+  // topic mapper's bookkeeping fields into the public /api/state shape.
+  function assignKnown(target, source) {
+    if (!source || typeof source !== 'object') return target;
+    for (const key of Object.keys(target)) {
+      if (source[key] !== undefined) target[key] = source[key];
+    }
+    return target;
+  }
+
+  // Cloud telemetry merged with an optionally loaded .bgcode analysis. MQTT
+  // publishes no job name, thumbnail, layer, swap or waste data, so a dropped
+  // file supplies all of it through the same mapLive() the replay uses.
+  function cloudBase() {
+    const base = assignKnown(idleBase(), cloudSnapshot());
+    base.name = null;
+    if (!analysis) return base;
+
+    base.name = printName || null;
+    if (base.material == null) base.material = materialFor(analysis, base.currentTool);
+    if (analysis.totalFilamentG != null) base.filamentG = Math.round(analysis.totalFilamentG);
+
+    const progress = finiteOrNull(base.progress);
+    if (progress == null) return base;
+    const remainingSec = finiteOrNull(base.timeRemainingSec);
+    const live = mapLive(analysis, progress, remainingSec == null ? null : remainingSec / 60);
+    const finished = base.state === 'FINISHED';
+    base.swapsTotal = live.swapsTotal ?? null;
+    base.swapsDone = finished && live.swapsTotal != null ? live.swapsTotal : (live.swapsDone ?? null);
+    base.wasteTotal = round1(live.wasteTotal);
+    base.wasteDone = round1(finished && live.wasteTotal != null ? live.wasteTotal : live.wasteDone);
+    base.totalLayers = live.totalLayers ?? null;
+    base.currentLayer = finished && live.totalLayers != null ? live.totalLayers : (live.currentLayer ?? null);
+    base.nextToolLabel = finished || live.nextTool == null ? null : live.nextTool + 1;
+    base.nextSwapInSec = finished || live.nextSwapRemMin == null
+      ? null : Math.round(live.nextSwapRemMin * 60);
+    return base;
+  }
+
+  // The MQTT link, not the retained data/online payload, decides freshness:
+  // `1` stays retained on the broker long after the socket dies. While the
+  // link is up silence is normal (an idle printer publishes nothing), so
+  // staleSec only starts running once the link is down.
+  function cloudFreshness(reportedOnline) {
+    const linkLive = cloudPhase === 'live' && cloudLastMessageAt != null;
+    if (linkLive) return { online: reportedOnline !== false, staleSec: 0 };
+    const anchor = cloudLastMessageAt != null ? cloudLastMessageAt
+      : (cloudAnchorAt != null ? cloudAnchorAt : now());
+    return { online: false, staleSec: Math.max(0, Math.floor((now() - anchor) / 1000)) };
+  }
+
+  function buildState() {
+    const cloud = mode === 'cloud';
+    const base = cloud ? cloudBase() : (replay ? replay.stateAt(playedSecNow()) : idleBase());
+    const view = toolSettingsView(base.toolLabel ?? undefined);
+    const key = thumbnailKey();
+    if (cloud && completedJob && completedJob.jobKey !== key) completedJob = null;
+    const freshness = cloud ? cloudFreshness(base.online) : { online: true, staleSec: 0 };
+    const camera = { ...DISABLED_STREAM_STATUS };
+    if (cloud) camera.error = CLOUD_CAMERA_REASON;
+    const out = {
+      ...base,
+      activity: base.activity ?? null,
+      fanPrint: base.fanPrint ?? null,
+      online: freshness.online,
+      staleSec: freshness.staleSec,
       updatedAt: Math.floor(now() / 1000),
       thumbnailUrl: thumbnail ? (thumbnailObjectUrl || '/api/thumbnail') : null,
-      thumbnailKey: thumbnailKey(),
+      thumbnailKey: key,
       analyzing,
-      completedJob: completedJobFor(replay ? base : null),
+      completedJob: completedJobFor((cloud || replay) ? base : null),
       toolCount: view.effective.toolCount,
       toolCountSource: view.effective.toolCountSource,
       toolSlots: view.effective.toolSlots,
       toolSettings: view,
-      camera: { ...DISABLED_STREAM_STATUS },
-      nozzle: { ...DISABLED_STREAM_STATUS },
+      camera,
+      nozzle: { ...camera },
       nozzlePipUrl: null,
       timelapseUrl: null,
       timelapseIntervalSec,
@@ -489,7 +979,8 @@ export function createEngine(options = {}) {
       roomHumidity: null,
       outdoorTemp: null,
     };
-    if (lastError) out.error = lastError;
+    const error = cloud ? (cloudFailure || lastError) : lastError;
+    if (error) out.error = error;
     return out;
   }
 
@@ -648,6 +1139,8 @@ export function createEngine(options = {}) {
     setModeDemo,
     loadFile,
     setBridge,
+    setModeCloud,
+    stopCloud: teardownCloud,
     getStatus,
     play,
     pause,
