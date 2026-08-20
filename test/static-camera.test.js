@@ -261,12 +261,14 @@ async function startCamera(extra = {}) {
   camera.on('stream', (s) => events.push({ type: 'stream', s }));
   camera.on('error', (e) => events.push({ type: 'error', message: e.message }));
   await camera.start();
-  return { camera, socket, emitted, peers, events, timeouts, deliver: (bytes) => eventHandler({ name: 'webrtc', payload: bytes }) };
+  return { camera, socket, emitted, peers, events, timeouts, deliver: (bytes, name) => eventHandler({ name: name || 'webrtc', payload: bytes }) };
 }
 
 test('the camera client authenticates then requests a stream, and never configures the camera', async () => {
   const { emitted } = await startCamera();
-  assert.deepEqual(emitted.map((e) => e.name), ['client_authentication', 'webrtc']);
+  // get_status is a read-only query; it is what lets the client explain an
+  // RTSP-mode camera precisely instead of waiting out the timeout.
+  assert.deepEqual(emitted.map((e) => e.name), ['client_authentication', 'trigger', 'webrtc']);
   // Rule that protects the owner's RTSP feed: this module must never write a
   // camera setting, because enabling WebRTC turns the camera's RTSP server off.
   assert.ok(!emitted.some((e) => e.name === 'configuration'),
@@ -323,4 +325,32 @@ test('a rejected camera token surfaces the rejection code', async () => {
   const { events } = await startCamera({ ack: 7 });
   const error = events.find((e) => e.type === 'error');
   assert.match(error.message, /rejected the camera token \(code 7\)/);
+});
+
+test('a camera reporting RTSP mode is explained precisely, with the OBS consequence', async () => {
+  const pb = await import(PROTOBUF_PATH);
+  const { events, deliver } = await startCamera();
+  // system(4).webrtc(11).mode(1) = OFF, the shape the real camera sends.
+  const webrtc = pb.createWriter().varint(1, pb.WEBRTC_MODE.OFF).finish();
+  const system = pb.createWriter().message(11, webrtc).finish();
+  const status = pb.createWriter().message(4, system).finish();
+  deliver(status, 'status');
+  await new Promise((r) => setTimeout(r, 5));
+  const error = events.find((e) => e.type === 'error');
+  assert.match(error.message, /set to RTSP, not WebRTC/);
+  // The side effect of switching has to be stated, not discovered later.
+  assert.match(error.message, /turns its RTSP server off/);
+  assert.match(error.message, /OBS/);
+});
+
+test('readWebrtcMode finds the mode under either system field number', async () => {
+  const pb = await import(PROTOBUF_PATH);
+  for (const systemField of [4, 5]) {
+    const webrtc = pb.createWriter().varint(1, pb.WEBRTC_MODE.ON).finish();
+    const system = pb.createWriter().message(11, webrtc).finish();
+    const status = pb.createWriter().message(systemField, system).finish();
+    assert.equal(pb.readWebrtcMode(status), pb.WEBRTC_MODE.ON, `system field ${systemField}`);
+  }
+  assert.equal(pb.readWebrtcMode(pb.createWriter().string(1, 'nope').finish()), null);
+  assert.equal(pb.readWebrtcMode(Uint8Array.of(0xff, 0xff)), null, 'garbage must not throw');
 });

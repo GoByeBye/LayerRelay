@@ -16,8 +16,8 @@
 // Browser ESM. No Node APIs, no dependencies.
 
 import {
-  encodeClientAuthentication, encodeWebRtc, decodeWebRtc,
-  WEBRTC_MSG_TYPE, WEBRTC_CLIENT_TYPE,
+  encodeClientAuthentication, encodeWebRtc, decodeWebRtc, encodeCameraTrigger, readWebrtcMode,
+  WEBRTC_MSG_TYPE, WEBRTC_CLIENT_TYPE, WEBRTC_MODE,
   ICE_SCHEME_TYPE, ICE_TRANSPORT_PROTOCOL, ICE_POLICY,
 } from './protobuf.mjs';
 import { createSocketIo } from './socketio.mjs';
@@ -28,8 +28,14 @@ const ICE_CONFIG_URL = 'https://camera-service-api.prusa3d.com/v1/camera-webrtc-
 const REQUEST_TIMEOUT_MS = 15000;
 // By far the likeliest reason a camera never answers, so say it rather than
 // leaving the user staring at a generic timeout.
-const NO_ANSWER_MESSAGE = 'the camera did not answer. It is probably set to RTSP rather than ' +
-  'WebRTC in Prusa Connect, or it is offline.';
+const NO_ANSWER_MESSAGE = 'the camera did not answer. It may be set to RTSP rather than ' +
+  'WebRTC in Prusa Connect, or it may be offline.';
+// The camera reports its own mode, so say so exactly rather than inferring it
+// from silence. Switching it back is a decision with a side effect worth
+// naming: the same setting that enables WebRTC turns the RTSP server off.
+const RTSP_MODE_MESSAGE = 'this camera is set to RTSP, not WebRTC, so it will not send video to ' +
+  'a browser. Switching it to WebRTC in Prusa Connect turns its RTSP server off, which breaks ' +
+  'anything reading rtsp:// from it, such as OBS or a LayerRelay relay.';
 
 // stun:host:port / turns:host:port?transport=tcp, matching Prusa's own parser.
 const ICE_URL = /^(stun|turn|turns):([^:?]+)(?::(\d+))?(?:\?transport=(udp|tcp|tls))?$/;
@@ -168,6 +174,12 @@ export function createCloudCamera(options = {}) {
     } catch { /* a candidate that arrives too late is not fatal */ }
   }
 
+  // A status message answers the question the 15s timeout can only guess at.
+  function handleStatus(bytes) {
+    const mode = readWebrtcMode(bytes);
+    if (mode === WEBRTC_MODE.OFF) fail(RTSP_MODE_MESSAGE);
+  }
+
   function handleSignal(bytes) {
     let message;
     try { message = decodeWebRtc(bytes); }
@@ -236,7 +248,11 @@ export function createCloudCamera(options = {}) {
     socket.on('close', () => { if (!stopped && phase !== 'error') fail('the signaling link closed'); });
     socket.on('error', () => { /* a close event follows */ });
     socket.on('event', (evt) => {
-      if (evt && evt.name === 'webrtc' && evt.payload) handleSignal(evt.payload);
+      if (!evt || !evt.payload) return;
+      if (evt.name === 'webrtc') handleSignal(evt.payload);
+      // The camera answers get_status on an event whose name the server does
+      // not always label, so any other binary frame is tried as a status.
+      else handleStatus(evt.payload);
     });
     socket.on('connect', async ({ id }) => {
       sessionId = id;
@@ -254,6 +270,11 @@ export function createCloudCamera(options = {}) {
       }
       if (stopped) return;
       setPhase('requesting');
+      // Read-only query: tells us the camera's mode so a camera in RTSP mode
+      // gets a precise explanation instead of a silent fifteen second wait.
+      socket.emitBinary('trigger', encodeCameraTrigger({
+        cameraToken, requestId: sessionId, query: 'get_status',
+      })).catch(() => { /* the request below is what actually matters */ });
       sendWebRtc({
         messageType: WEBRTC_MSG_TYPE.REQUEST,
         iceConfiguration: iceConfiguration ? restIceToProtobuf(iceConfiguration, ttl) : undefined,

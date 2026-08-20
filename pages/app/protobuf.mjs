@@ -109,6 +109,9 @@ export const WEBRTC_MSG_TYPE = Object.freeze({
 });
 export const WEBRTC_CLIENT_TYPE = Object.freeze({ UNKNOWN: 0, CAMERA: 1, CLIENT: 2 });
 export const WEBRTC_STREAM_STATUS = Object.freeze({ INVALID: 0, START: 1, STOP: 2 });
+export const CAMERA_TRIGGER_ENABLE = 1;
+export const WEBRTC_MODE = Object.freeze({ UNKNOWN: 0, ON: 1, OFF: 2 });
+export const RTSP_SERVER_MODE = Object.freeze({ INVALID: 0, TRIGGER: 1, ON: 2, OFF: 3 });
 export const ICE_SCHEME_TYPE = Object.freeze({ UNDEFINED: 0, STUN: 1, TURN: 2 });
 export const ICE_TRANSPORT_PROTOCOL = Object.freeze({ UNDEFINED: 0, UDP: 1, TCP: 2, TLS: 3 });
 export const ICE_POLICY = Object.freeze({ UNDEFINED: 0, ALL: 1, RELAY: 2 });
@@ -215,4 +218,40 @@ export function decodeWebRtc(bytes) {
     clientType: asNumber(f[7]),
     iceConfiguration: iceEntry ? decodeIceConfiguration(iceEntry.bytes) : null,
   };
+}
+
+// CameraTrigger { 1: get_status, 2: get_features, 11: camera_token, 13: request_id }
+// Only the two read-only queries are exposed. The same message can carry
+// set_* and start_* fields that change camera settings; they are deliberately
+// absent here so no code path in this app can write one.
+export function encodeCameraTrigger({ cameraToken, requestId, query }) {
+  const writer = createWriter();
+  if (query === 'get_status') writer.varint(1, CAMERA_TRIGGER_ENABLE);
+  else if (query === 'get_features') writer.varint(2, CAMERA_TRIGGER_ENABLE);
+  else throw new TypeError('only get_status and get_features may be requested');
+  return writer.string(11, cameraToken).string(13, requestId).finish();
+}
+
+// Digs system.webrtc.mode out of a camera status message. `system` is field 4
+// on one status shape and field 5 on the other, so both are tried; `webrtc` is
+// field 11 within it and `mode` is its field 1.
+export function readWebrtcMode(bytes) {
+  let fields;
+  try { fields = decode(bytes); }
+  catch { return null; }
+  for (const systemField of [4, 5]) {
+    const entry = Array.isArray(fields[systemField]) ? fields[systemField][0] : fields[systemField];
+    if (!entry || !entry.bytes) continue;
+    let system;
+    try { system = decode(entry.bytes); }
+    catch { continue; }
+    const webrtcEntry = Array.isArray(system[11]) ? system[11][0] : system[11];
+    if (!webrtcEntry || !webrtcEntry.bytes) continue;
+    let webrtc;
+    try { webrtc = decode(webrtcEntry.bytes); }
+    catch { continue; }
+    const mode = Array.isArray(webrtc[1]) ? webrtc[1][0] : webrtc[1];
+    if (mode && mode.varint !== undefined) return mode.varint;
+  }
+  return null;
 }
