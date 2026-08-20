@@ -1012,7 +1012,20 @@ const CONTENT_SECURITY_POLICY =
 const app = express();
 app.disable('x-powered-by');
 
-app.use((_req, res, next) => {
+// Opt-in cross-origin read access for the static Pages dashboard's live bridge.
+// Only origins listed verbatim in apiReadAllowedOrigins are ever echoed back in
+// Access-Control-Allow-Origin; unlisted origins get no CORS headers at all, so
+// the same-origin default holds and nothing is reflected or wildcarded.
+const apiReadAllowedOrigins = new Set(cfg.apiReadAllowedOrigins || []);
+// <img> embeds are no-cors requests that carry no Origin header, so the image
+// and stream routes cannot be gated per origin. A non-empty read allowlist
+// therefore relaxes the resource policy on exactly these routes; every other
+// response keeps Cross-Origin-Resource-Policy: same-origin.
+const CROSS_ORIGIN_MEDIA_PATHS = new Set([
+  '/api/thumbnail', '/api/camera.mjpeg', '/api/camera.jpg', '/api/nozzle.mjpeg', '/api/nozzle.jpg',
+]);
+
+app.use((req, res, next) => {
   res.set({
     'Cache-Control': 'no-store',
     'Content-Security-Policy': CONTENT_SECURITY_POLICY,
@@ -1022,6 +1035,29 @@ app.use((_req, res, next) => {
     'X-Content-Type-Options': 'nosniff',
     Link: `<${sourceCodeUrl}>; rel="source"`,
   });
+  if (req.path.startsWith('/api/')) {
+    if (apiReadAllowedOrigins.size > 0 && CROSS_ORIGIN_MEDIA_PATHS.has(req.path)) {
+      res.set('Cross-Origin-Resource-Policy', 'cross-origin');
+    }
+    const origin = req.get('origin');
+    if (origin && apiReadAllowedOrigins.has(origin)) {
+      res.set({
+        'Access-Control-Allow-Origin': origin,
+        Vary: 'Origin',
+        'Access-Control-Expose-Headers': 'ETag',
+      });
+      // Preflight. Writes are advertised only to origins that may also save
+      // settings via toolSettingsAllowedOrigins; read-only origins get GET alone.
+      if (req.method === 'OPTIONS' && req.get('access-control-request-method')) {
+        res.set({
+          'Access-Control-Allow-Methods': toolSettingsAllowedOrigins.has(origin) ? 'GET, PUT' : 'GET',
+          'Access-Control-Allow-Headers': 'Content-Type, If-Match',
+          'Access-Control-Max-Age': '600',
+        });
+        return res.status(204).end();
+      }
+    }
+  }
   next();
 });
 
@@ -1084,6 +1120,19 @@ const toolSettingsAllowedOrigins = new Set(cfg.toolSettingsAllowedOrigins || [])
 const toolSettingsAllowedHosts = new Set([...toolSettingsAllowedOrigins]
   .map((origin) => new URL(origin).host.toLowerCase()));
 function sameOriginSettingsWrite(req, res, next) {
+  // Cross-site writes from an origin listed verbatim in toolSettingsAllowedOrigins
+  // (e.g. the static Pages dashboard saving through a local bridge) are accepted on
+  // the strength of the browser-enforced Origin header. The CORS preflight for such
+  // a write is only ever granted when the origin is also in apiReadAllowedOrigins,
+  // and the If-Match revision check still applies. Every other request takes the
+  // original same-origin path below, unchanged.
+  const crossSiteOrigin = req.get('origin');
+  if (crossSiteOrigin && toolSettingsAllowedOrigins.has(crossSiteOrigin)) {
+    if (!req.is('application/json')) {
+      return res.status(415).json({ error: 'content type must be application/json' });
+    }
+    return toolSettingsJson(req, res, next);
+  }
   // Origin/Fetch-Metadata checks alone do not stop DNS rebinding because a hostile
   // hostname remains same-origin after it resolves to a local address. Accept
   // loopback and literal-IP Hosts by default; named Hosts require an explicit origin.

@@ -77,6 +77,7 @@ modified container deployment.
 | `sourceCodeUrl` | HTTP(S) URL, project repository | Public | `"https://github.com/GoByeBye/LayerRelay"` | Dashboard source/license link and HTTP `Link` target. Modified deployments must use their exact source. |
 | `toolCount` | `null` or integer 1–32, `null` | Non-secret | `null` | `null` follows the tool inventory inferred from Prusa Connect; an integer is a manual count override. |
 | `toolSettingsAllowedOrigins` | array of up to 16 exact HTTP(S) origins, `[]` | Non-secret | `["https://relay.example"]` | Extra named browser origins allowed to save tool settings. Loopback and literal IP origins are accepted automatically. Add only origins protected by your deployment boundary. |
+| `apiReadAllowedOrigins` | array of up to 16 exact HTTP(S) origins, `[]` | Non-secret | `["https://username.github.io"]` | Browser origins allowed to read `/api/*` responses cross-origin, for the static Pages dashboard's live bridge. Cross-site settings saves additionally require the origin in `toolSettingsAllowedOrigins`. |
 | `toolSlots` | object, `{}` | Slot names may identify private inventory | `{"1":{"loaded":true,"name":"Example filament","color":"#ff8a3d"}}` | Slot keys are integers from 1 through 32; nested fields are below. |
 | `printNameOverrides` | object of string values, `{}` | Identifying print names | `{"example.bgcode":"Demo vase"}` | Exact job-key to display-name replacements; values are at most 200 characters. |
 | `localBgcodeDirs` | array of non-empty strings, `[]` | Local paths may identify a machine | `["/srv/gcode"]` | Folders searched before downloading a job from the printer; mount container paths explicitly. |
@@ -122,6 +123,20 @@ from turning an unrelated public hostname into a local settings writer.
 Each settings read returns an `ETag`; writes must send that value in `If-Match`.
 LayerRelay rejects a stale full-snapshot save with HTTP `409`, so one browser
 cannot silently overwrite settings saved by another browser.
+
+The JSON API itself stays same-origin by default. `apiReadAllowedOrigins` lists
+exact browser origins, such as the static GitHub Pages dashboard, that may read
+`GET /api/*` responses cross-origin. Only a listed origin is ever echoed in
+`Access-Control-Allow-Origin`; there is no wildcard, and unlisted origins
+receive no CORS headers at all. Preflights advertise `PUT` only when the origin
+also appears in `toolSettingsAllowedOrigins`, and a cross-site save still passes
+the same `If-Match` revision check as a local browser. Because `<img>` embeds
+send no `Origin` header, a non-empty read allowlist also relaxes
+`Cross-Origin-Resource-Policy` from `same-origin` to `cross-origin` on the image
+and stream routes only (`/api/thumbnail`, `/api/camera.mjpeg`,
+`/api/camera.jpg`, `/api/nozzle.mjpeg`, `/api/nozzle.jpg`), so those images can
+be embedded by any site while the JSON API remains gated per origin. Leave the
+list empty unless the static dashboard bridge is deliberately in use.
 
 At startup, `openprinttag-index.js` loads the last valid normalized snapshot
 from `DATA_DIR/openprinttag-materials-v1.json`. When that snapshot is missing or

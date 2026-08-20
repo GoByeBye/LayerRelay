@@ -68,7 +68,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 binary G-code specification, Heatshrink decoding behavior, and
 `MeatPack::unbinarize` behavior. It entered this codebase on 2026-07-04 and has
 since been modified for JavaScript buffer handling, error handling, and this
-application's metadata needs.
+application's metadata needs. On 2026-08-19, `pages/app/bgcode.mjs` was added
+as a browser ESM port of `bgcode.js` for the static GitHub Pages build; the
+libbgcode, MeatPack, and heatshrink provenance and notices in this file apply
+to that port equally.
 
 The provenance audit compared the local port with immutable upstream revision
 [`6f4ad7ce6b0e638b760199d6611039a610a5a479`](https://github.com/prusa3d/libbgcode/tree/6f4ad7ce6b0e638b760199d6611039a610a5a479),

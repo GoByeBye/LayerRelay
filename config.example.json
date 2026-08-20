@@ -12,6 +12,7 @@
   "printNameOverrides": {},
   "toolCount": null,
   "toolSettingsAllowedOrigins": [],
+  "apiReadAllowedOrigins": [],
   "toolSlots": {},
   "localBgcodeDirs": [],
   "cameraRtspUrl": "",

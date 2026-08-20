@@ -15,6 +15,7 @@ const DEFAULT_CONFIG = Object.freeze({
   toolCount: null,
   toolSlots: {},
   toolSettingsAllowedOrigins: [],
+  apiReadAllowedOrigins: [],
   printNameOverrides: {},
   localBgcodeDirs: [],
   cameraRtspUrl: '',
@@ -41,7 +42,7 @@ const KNOWN_CONFIG_KEYS = new Set([
   '$schema',
   'printerHost', 'username', 'password', 'listenHost', 'port', 'sourceCodeUrl', 'pollIntervalMs',
   'analysisCacheMaxEntries', 'analysisCacheMaxBytes', 'printNameOverrides',
-  'toolCount', 'toolSlots', 'toolSettingsAllowedOrigins', 'localBgcodeDirs',
+  'toolCount', 'toolSlots', 'toolSettingsAllowedOrigins', 'apiReadAllowedOrigins', 'localBgcodeDirs',
   'cameraRtspUrl', 'cameraStreamEnabled', 'cameraFfmpegPath', 'cameraStreamFps',
   'cameraStreamWidth', 'cameraStreamJpegQuality', 'cameraStreamThreads',
   'cameraStreamKillGraceMs', 'cameraStreamIdleMs', 'cameraStreamStallMs',
@@ -327,6 +328,33 @@ function validateConfig(config, { requirePrinter = true } = {}) {
           errors.push(`toolSettingsAllowedOrigins.${index} must be an exact HTTP(S) origin without credentials or a path`);
         } else if (seenOrigins.has(origin)) {
           errors.push('toolSettingsAllowedOrigins entries must be unique');
+        } else {
+          seenOrigins.add(origin);
+        }
+      }
+    }
+  }
+  if (config.apiReadAllowedOrigins != null) {
+    if (!Array.isArray(config.apiReadAllowedOrigins) || config.apiReadAllowedOrigins.length > 16) {
+      errors.push('apiReadAllowedOrigins must be an array of at most 16 HTTP(S) origins');
+    } else {
+      const seenOrigins = new Set();
+      for (let index = 0; index < config.apiReadAllowedOrigins.length; index++) {
+        const value = config.apiReadAllowedOrigins[index];
+        let valid = typeof value === 'string' && value === value.trim() && !/[\u0000-\u001f\u007f]/.test(value);
+        let origin = null;
+        if (valid) {
+          try {
+            const parsed = new URL(value);
+            valid = ['http:', 'https:'].includes(parsed.protocol) && !parsed.username && !parsed.password &&
+              parsed.pathname === '/' && !parsed.search && !parsed.hash && value === parsed.origin;
+            origin = parsed.origin;
+          } catch { valid = false; }
+        }
+        if (!valid) {
+          errors.push(`apiReadAllowedOrigins.${index} must be an exact HTTP(S) origin without credentials or a path`);
+        } else if (seenOrigins.has(origin)) {
+          errors.push('apiReadAllowedOrigins entries must be unique');
         } else {
           seenOrigins.add(origin);
         }
