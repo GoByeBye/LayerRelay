@@ -202,9 +202,15 @@ export function createConnectAuth(options = {}) {
     }
   }
 
-  function markBackupState(state) {
+  // The marker names one specific token, so it must only ever be written while
+  // that exact token is still the stored one. Between capturing a token and
+  // hearing back about it, a peer tab or a freshly pasted token can replace the
+  // record; branding that newer token would durably condemn a live chain and
+  // make every later instance refuse to contact Prusa at all.
+  function markBackupState(state, expectedToken) {
     const record = readRecord();
     if (!record) return;
+    if (expectedToken != null && record.refreshToken !== expectedToken) return;
     try {
       writeKey(CONNECT_BACKUP_KEY, {
         refreshToken: record.refreshToken,
@@ -359,7 +365,7 @@ export function createConnectAuth(options = {}) {
     }
     // Record that this exact token is being spent, so an interrupted refresh
     // (tab closed, network dropped) can be reported instead of guessed at.
-    markBackupState('spending');
+    markBackupState('spending', record.refreshToken);
     const body = new URLSearchParams({
       grant_type: 'refresh_token',
       refresh_token: record.refreshToken,
@@ -389,7 +395,7 @@ export function createConnectAuth(options = {}) {
       // advice is identical and re-capturing the token is the only fix.
       if (reason === 'invalid_grant' || (!reason && (status === 400 || status === 401))) {
         deadRefreshToken = record.refreshToken;
-        markBackupState('invalid_grant');
+        markBackupState('invalid_grant', record.refreshToken);
         throw connectAuthError('invalid_grant', INVALID_GRANT_MESSAGE);
       }
       throw connectAuthError(

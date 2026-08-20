@@ -63,6 +63,8 @@ const CLOUD_BACKOFF_MAX_MS = 30000;
 // A CONNACK/SUBACK that never arrives must not wedge the link forever.
 const CLOUD_CONNECT_TIMEOUT_MS = 20000;
 const CLOUD_CAMERA_REASON = 'no camera in cloud mode';
+// Ordinary quiet between publishes during a print, before silence counts as stale.
+const CLOUD_ACTIVE_SILENCE_GRACE_SEC = 30;
 
 // Retrying any of these only burns the token chain further, so cloud mode
 // stops on them. The engine surfaces its own wording rather than the thrown
@@ -290,6 +292,13 @@ export function createEngine(options = {}) {
     if (!store || typeof store.setItem !== 'function') return;
     try { store.setItem(key, value); }
     catch { /* quota or private mode: persistence is best effort */ }
+  }
+
+  function storageRemove(key) {
+    const store = storageRef();
+    if (!store || typeof store.removeItem !== 'function') return;
+    try { store.removeItem(key); }
+    catch { /* nothing else to try */ }
   }
 
   let mode = 'demo';
@@ -936,11 +945,24 @@ export function createEngine(options = {}) {
 
   // The MQTT link, not the retained data/online payload, decides freshness:
   // `1` stays retained on the broker long after the socket dies. While the
-  // link is up silence is normal (an idle printer publishes nothing), so
-  // staleSec only starts running once the link is down.
-  function cloudFreshness(reportedOnline) {
+  // link is up silence is normal for an IDLE printer, which publishes nothing.
+  // A printing one publishes progress, temperatures, and Z height continuously,
+  // so sustained silence means it stopped talking to Prusa. The socket to the
+  // broker stays open either way, so without this the overlay would keep
+  // counting down a frozen ETA as though the print were still running.
+  function cloudFreshness(reportedOnline, printerState) {
     const linkLive = cloudPhase === 'live' && cloudLastMessageAt != null;
-    if (linkLive) return { online: reportedOnline !== false, staleSec: 0 };
+    if (linkLive) {
+      const active = printerState === 'PRINTING' || printerState === 'PAUSED';
+      const silentSec = active
+        ? Math.max(0, Math.floor((now() - cloudLastMessageAt) / 1000)) : 0;
+      return {
+        online: reportedOnline !== false,
+        // The grace period absorbs ordinary gaps between publishes; past it,
+        // staleSec drives the overlay's existing stale and offline states.
+        staleSec: Math.max(0, silentSec - CLOUD_ACTIVE_SILENCE_GRACE_SEC),
+      };
+    }
     const anchor = cloudLastMessageAt != null ? cloudLastMessageAt
       : (cloudAnchorAt != null ? cloudAnchorAt : now());
     return { online: false, staleSec: Math.max(0, Math.floor((now() - anchor) / 1000)) };
@@ -952,7 +974,7 @@ export function createEngine(options = {}) {
     const view = toolSettingsView(base.toolLabel ?? undefined);
     const key = thumbnailKey();
     if (cloud && completedJob && completedJob.jobKey !== key) completedJob = null;
-    const freshness = cloud ? cloudFreshness(base.online) : { online: true, staleSec: 0 };
+    const freshness = cloud ? cloudFreshness(base.online, base.state) : { online: true, staleSec: 0 };
     const camera = { ...DISABLED_STREAM_STATUS };
     if (cloud) camera.error = CLOUD_CAMERA_REASON;
     const out = {
@@ -1134,6 +1156,27 @@ export function createEngine(options = {}) {
     return respondVirtual(url, init);
   }
 
+  // Leaves nothing behind on a shared machine: stops the link, then removes the
+  // refresh token, its mirror, the lock, and the printer id. A stored token
+  // mints access tokens for the whole Prusa account, so the page has to offer a
+  // way to remove it rather than relying on the visitor clearing site data.
+  async function forgetCloudCredentials() {
+    teardownCloud();
+    cloudFatal = null;
+    let auth = cloudAuth;
+    if (!auth) {
+      try { auth = await authFactory({ storage: storageRef(), fetchImpl, now }); }
+      catch { auth = null; }
+    }
+    if (auth && typeof auth.clear === 'function') {
+      try { auth.clear(); } catch { /* storage already unavailable */ }
+    }
+    cloudAuth = null;
+    cloudUserId = null;
+    storageRemove(CLOUD_PRINTER_KEY);
+    emit();
+  }
+
   return {
     handleFetch,
     setModeDemo,
@@ -1141,6 +1184,7 @@ export function createEngine(options = {}) {
     setBridge,
     setModeCloud,
     stopCloud: teardownCloud,
+    forgetCloudCredentials,
     getStatus,
     play,
     pause,

@@ -578,6 +578,32 @@ export function createStaticApp(options) {
     refreshIfMounted();
   }
 
+  function forgetCloud() {
+    if (refs) {
+      refs.tokenInput.value = '';
+      refs.printerInput.value = '';
+    }
+    state.printerId = '';
+    cloudSeq += 1;
+    storageSet(win, MODE_KEY, 'demo');
+    if (!engine || typeof engine.forgetCloudCredentials !== 'function') {
+      state.cloud = { phase: 'error', detail: 'this build cannot remove stored credentials' };
+      refreshIfMounted();
+      return;
+    }
+    state.cloud = { phase: 'idle', detail: '' };
+    refreshIfMounted();
+    Promise.resolve()
+      .then(function () { return engine.forgetCloudCredentials(); })
+      .then(function () {
+        state.cloud = { phase: 'forgotten', detail: '' };
+        refreshIfMounted();
+      }, function (err) {
+        state.cloud = { phase: 'error', detail: messageOf(err) };
+        refreshIfMounted();
+      });
+  }
+
   function seekTo(value) {
     if (!engine || typeof engine.seekPct !== 'function') return;
     const pct = Number(value);
@@ -739,6 +765,11 @@ export function createStaticApp(options) {
     built.cloudBtn = makeEl(doc, 'button', 'lr-btn', 'Connect');
     built.cloudBtn.type = 'button';
     cloudRow.appendChild(built.cloudBtn);
+    // A stored refresh token mints access tokens for the whole Prusa account,
+    // so removing it has to be one click, not "clear your site data".
+    built.forgetBtn = makeEl(doc, 'button', 'lr-btn', 'Forget token');
+    built.forgetBtn.type = 'button';
+    cloudRow.appendChild(built.forgetBtn);
     built.cloudSection.appendChild(cloudRow);
 
     built.cloudStatus = makeStatusLine(doc, 'lr-cloud-status');
@@ -858,6 +889,7 @@ export function createStaticApp(options) {
       connectCloud(refs.printerInput.value, refs.tokenInput.value);
     }
     refs.cloudBtn.addEventListener('click', submitCloud);
+    refs.forgetBtn.addEventListener('click', forgetCloud);
     for (const field of [refs.printerInput, refs.tokenInput]) {
       field.addEventListener('keydown', function (event) {
         if (event.key !== 'Enter') return;
@@ -984,6 +1016,9 @@ export function createStaticApp(options) {
     const local = state.cloud;
     if (local.phase === 'invalid') return [local.detail, true];
     if (local.phase === 'error') return ['Prusa Connect failed: ' + local.detail, true];
+    if (local.phase === 'forgotten') {
+      return ['Removed the stored refresh token and printer ID from this browser.', false];
+    }
     const cloud = status && status.cloud;
     if (!cloud) {
       if (local.phase === 'starting') return ['Starting Prusa Connect…', false];
@@ -1067,6 +1102,7 @@ export function createStaticApp(options) {
     refs.drop.disabled = !engine;
     refs.connectBtn.disabled = !engine;
     refs.cloudBtn.disabled = !engine;
+    refs.forgetBtn.disabled = !engine;
     refs.playBtn.textContent = pickPlaying(status) ? 'Pause' : 'Play';
 
     const progress = pickNumber(status, ['progressPct', 'progress', 'pct']);

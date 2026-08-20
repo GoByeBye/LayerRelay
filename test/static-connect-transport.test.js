@@ -1118,3 +1118,51 @@ test('an error listener that closes the client cannot re-enter the teardown', as
   assert.deepEqual(order, ['error:connack', 'close:connack']);
   assert.equal(clock.pendingTimers(), 0);
 });
+
+// The dead-token marker is durable and cross-instance: getAccessToken refuses
+// to contact Prusa when it names the stored chain. It must therefore only ever
+// name the token the account service actually rejected. A slow 400 landing
+// after another instance stored a fresh token used to brand that fresh token,
+// which a later instance (a page reload) would then refuse forever. In-process
+// the retry usually heals it, so this pins the invariant rather than the
+// original crash path.
+test('the dead-token marker never names the chain that is currently stored', async () => {
+  let release = null;
+  const held = new Promise((resolve) => { release = resolve; });
+  const storage = memStorage();
+  const clock = makeClock();
+  // Only OLD is genuinely dead; any other token must still work, so a retry
+  // cannot be mistaken for the bug under test.
+  const slow = makeFetch({
+    [TOKEN_URL]: async (init) => {
+      const spent = new URLSearchParams(init.body).get('refresh_token');
+      if (spent !== 'OLD') return tokenBody('access-peer', 'ROTATED');
+      await held;
+      return jsonResponse({ error: 'invalid_grant' }, 400);
+    },
+  });
+  const { auth: doomedAuth } = await makeAuth({ storage, clock, fetcher: slow });
+  doomedAuth.configure({ refreshToken: 'OLD', printerUuid: UUID });
+  const doomed = doomedAuth.getAccessToken();
+  doomed.catch(() => {});
+  await clock.flush();
+
+  // A fresh instance over the same storage, exactly as reconnecting builds.
+  const { auth: peer } = await makeAuth({
+    storage, clock, handlers: { [TOKEN_URL]: () => tokenBody('access-new', 'ROTATED') },
+    randomId: () => 'owner-peer',
+  });
+  peer.configure({ refreshToken: 'NEW', printerUuid: UUID });
+
+  release();
+  await settle(clock, doomed.then(() => null, () => null));
+
+  const backup = JSON.parse(storage.getItem(BACKUP_KEY) || '{}');
+  const stored = JSON.parse(storage.getItem(STORAGE_KEY) || '{}');
+  assert.ok(stored.refreshToken && stored.refreshToken !== 'OLD',
+    'the rejected token is no longer the stored chain');
+  assert.ok(
+    backup.state !== 'invalid_grant' || backup.refreshToken !== stored.refreshToken,
+    'the live chain must not be branded invalid_grant',
+  );
+});
