@@ -6,6 +6,9 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Experimental Bambu Lab LAN MQTT monitoring with printer-type setup,
+  credential validation, live telemetry, AMS inventory, reconnect handling,
+  and a [setup and compatibility guide](docs/bambu-lab.md)
 - Docker and Docker Compose packaging with a non-root, read-only runtime
 - Cross-platform setup, diagnostics, syntax checks, and camera snapshot tooling
 - Portable configuration and data paths with environment overrides

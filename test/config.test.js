@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { onTestFinished, test } = require('bun:test');
-const { loadRuntimeConfig, validateConfig } = require('../config.js');
+const { DEFAULT_CONFIG, loadRuntimeConfig, validateConfig } = require('../config.js');
 
 function tempDir() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'layer-relay-config-'));
@@ -39,6 +39,7 @@ test('loads a file and applies typed environment overrides', () => {
   assert.equal(runtime.config.listenHost, '0.0.0.0');
   assert.equal(runtime.config.cameraStreamEnabled, true);
   assert.equal(runtime.config.useConnect, true);
+  assert.equal(runtime.config.printerType, 'prusa');
   assert.equal(runtime.config.sourceCodeUrl, 'https://code.example/overlay/tree/test');
   assert.deepEqual(runtime.config.toolSettingsAllowedOrigins, ['https://relay.example']);
   assert.equal(runtime.configPath, path.join(rootDir, 'custom.json'));
@@ -152,4 +153,47 @@ test('rejects malformed JSON with the path and no file contents', () => {
       return true;
     },
   );
+});
+
+test('supports Bambu credentials without PrusaLink credentials from environment and JSON', () => {
+  const rootDir = tempDir();
+  const runtime = loadRuntimeConfig({ rootDir, env: {
+    PRINTER_TYPE: 'bambu', PRINTER_HOST: '192.0.2.10',
+    BAMBU_SERIAL: 'EXAMPLE123456', BAMBU_ACCESS_CODE: 'test-code',
+  } });
+  assert.equal(runtime.config.printerType, 'bambu');
+  assert.equal(runtime.config.bambuSerial, 'EXAMPLE123456');
+  assert.equal(runtime.config.bambuAccessCode, 'test-code');
+  assert.equal(runtime.config.username, undefined);
+  fs.writeFileSync(path.join(rootDir, 'config.json'), JSON.stringify({
+    printerType: 'bambu', printerHost: 'printer.local',
+    bambuSerial: 'EXAMPLE123456', bambuAccessCode: 'file-code',
+  }));
+  assert.equal(loadRuntimeConfig({ rootDir, env: {
+    LAYER_RELAY_BAMBU_SERIAL: 'OVERRIDE123', LAYER_RELAY_BAMBU_ACCESS_CODE: 'env-code',
+  } }).config.bambuAccessCode, 'env-code');
+});
+
+test('requires type-specific credentials and rejects malformed Bambu topics and hosts without secrets', () => {
+  const base = { ...DEFAULT_CONFIG, printerType: 'bambu', printerHost: 'printer.local',
+    bambuSerial: 'EXAMPLE123456', bambuAccessCode: 'secret-test-code' };
+  for (const [patch, pattern] of [
+    [{ printerType: 'unknown' }, /printerType must be prusa or bambu/],
+    [{ bambuSerial: '' }, /bambuSerial must be a non-empty string/],
+    [{ bambuAccessCode: '' }, /bambuAccessCode must be a non-empty string/],
+    [{ bambuSerial: 'secret/topic/#' }, /bambuSerial must contain only letters and digits/],
+    [{ bambuAccessCode: 'secret with spaces' }, /bambuAccessCode must be at most 128 characters/],
+    [{ bambuAccessCode: 'replace-with-secret-code' }, /example placeholder/],
+    ...['printer:8883', 'user:secret@printer', 'printer/path', 'printer?query', 'printer#fragment']
+      .map((printerHost) => [{ printerHost }, /without a port, path, or credentials/]),
+  ]) {
+    assert.throws(() => validateConfig({ ...base, ...patch }), (error) => {
+      assert.match(error.message, pattern);
+      assert.doesNotMatch(error.message, /secret-test-code|secret with spaces|secret\/topic|replace-with-secret-code/);
+      return true;
+    });
+  }
+  validateConfig({ ...base, printerHost: '::1' });
+  validateConfig({ ...base, password: 'replace-with-your-prusalink-password' });
+  assert.throws(() => validateConfig({ ...base, printerType: 'prusa' }), /username must be a non-empty string/);
 });

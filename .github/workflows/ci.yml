@@ -258,6 +258,15 @@ jobs:
           curl --fail --silent --show-error http://127.0.0.1:18788/api/state >/dev/null
           docker stop layer-relay-env-override >/dev/null
 
+      - name: Verify Bambu environment-only startup without Prusa credentials
+        run: |
+          docker run --rm \
+            --env PRINTER_TYPE=bambu \
+            --env PRINTER_HOST=127.0.0.1 \
+            --env BAMBU_SERIAL=EXAMPLE123456 \
+            --env BAMBU_ACCESS_CODE=ci-fixture-code \
+            layer-relay:local bun -e "const {config}=require('./config.js').loadRuntimeConfig(); if(config.printerType!=='bambu'||process.getuid()!==1000)process.exit(1)"
+
       - name: Show container logs after a failure
         if: failure()
         run: docker compose logs --no-color overlay

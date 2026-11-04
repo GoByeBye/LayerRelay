@@ -1084,7 +1084,7 @@
     var count = Number.isInteger(value.toolCount) && value.toolCount >= 1 && value.toolCount <= 32 ? value.toolCount : null;
     if (count == null && Array.isArray(value.toolSlots) && value.toolSlots.length) count = Math.min(32, value.toolSlots.length);
     return {
-      source: value.source === 'connect' ? 'connect' : null,
+      source: ['connect', 'bambu'].indexOf(value.source) >= 0 ? value.source : null,
       status: ['fresh', 'stale', 'unavailable'].indexOf(value.status) >= 0 ? value.status : 'unavailable',
       toolCount: count,
       toolSlots: count == null ? [] : normalizePublicSlots(value.toolSlots, count),
@@ -1095,8 +1095,8 @@
     value = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
     var count = Number.isInteger(value.toolCount) && value.toolCount >= 1 && value.toolCount <= 32 ? value.toolCount : null;
     if (count == null) count = overrides.toolCount || detected.toolCount || 1;
-    var countSource = ['override', 'connect', 'fallback'].indexOf(value.toolCountSource) >= 0 ? value.toolCountSource :
-      (overrides.toolCount != null ? 'override' : detected.toolCount != null ? 'connect' : 'fallback');
+    var countSource = ['override', 'connect', 'bambu', 'fallback'].indexOf(value.toolCountSource) >= 0 ? value.toolCountSource :
+      (overrides.toolCount != null ? 'override' : detected.toolCount != null ? detected.source || 'connect' : 'fallback');
     return {
       toolCount: count,
       toolCountSource: countSource,
@@ -1116,7 +1116,7 @@
       var bareCount = overrides.toolCount || detected.toolCount || 1;
       effectiveSource = {
         toolCount: bareCount,
-        toolCountSource: overrides.toolCount != null ? 'override' : detected.toolCount != null ? 'connect' : 'fallback',
+        toolCountSource: overrides.toolCount != null ? 'override' : detected.toolCount != null ? detected.source || 'connect' : 'fallback',
         toolSlots: Array.isArray(value.toolSlots) ? value.toolSlots : [],
       };
     }
@@ -1196,6 +1196,9 @@
   }
 
   function connectStatusText(view) {
+    if (view && view.detected.source === 'bambu') {
+      return 'Bambu ' + view.detected.status;
+    }
     if (!view || view.detected.source !== 'connect') return 'Connect unavailable';
     if (view.detected.status === 'fresh') return 'Connect fresh';
     if (view.detected.status === 'stale') return 'Connect stale';
@@ -1207,7 +1210,7 @@
     var view = value && value.effective ? normalizeToolSettingsView(value) : toolSettingsViewFromState(value);
     var loaded = view.effective.toolSlots.filter(function (slot) { return slot.loaded === true; }).length;
     var provenance = view.effective.toolCountSource === 'override' ? 'Override' :
-      view.effective.toolCountSource === 'connect' ? 'Auto · ' + connectStatusText(view) : 'Auto · fallback';
+      ['connect', 'bambu'].indexOf(view.effective.toolCountSource) >= 0 ? 'Auto · ' + connectStatusText(view) : 'Auto · fallback';
     setText(el.toolSettingsSummary, view.effective.toolCount + ' tool' +
       (view.effective.toolCount === 1 ? '' : 's') + ' · ' + loaded + ' loaded · ' + provenance);
   }
@@ -1521,7 +1524,8 @@
   function automaticNameFeedback(label) {
     var value = automaticField(label, 'name');
     var status = toolEditorView && toolEditorView.detected ? toolEditorView.detected.status : 'unavailable';
-    var source = status === 'fresh' ? 'Connect' : status === 'stale' ? 'stale Connect data' : 'fallback';
+    var provider = toolEditorView.detected.source === 'bambu' ? 'Bambu' : 'Connect';
+    var source = status === 'fresh' ? provider : status === 'stale' ? 'stale ' + provider + ' data' : 'fallback';
     return value ? 'Auto from ' + source + ': ' + value + '. Editing creates a name override.' :
       (status === 'unavailable' ? 'Auto unavailable — type a custom filament name.' :
         'No automatic filament name — type to create an override.');
@@ -1549,12 +1553,12 @@
       setText(el.toolCountSource, count + ' custom slots · active tool extends display to ' +
         toolEditorView.effective.toolCount);
     } else if (!automatic) setText(el.toolCountSource, count + ' custom slots');
-    else if (toolEditorView.detected.source === 'connect' && toolEditorView.detected.status === 'fresh') {
-      setText(el.toolCountSource, count + ' detected by Connect');
-    } else if (toolEditorView.detected.source === 'connect' && toolEditorView.detected.status === 'stale') {
-      setText(el.toolCountSource, count + ' from stale Connect data');
+    else if (toolEditorView.detected.source && toolEditorView.detected.status === 'fresh') {
+      setText(el.toolCountSource, count + ' detected by ' + (toolEditorView.detected.source === 'bambu' ? 'Bambu' : 'Connect'));
+    } else if (toolEditorView.detected.source && toolEditorView.detected.status === 'stale') {
+      setText(el.toolCountSource, count + ' from stale ' + (toolEditorView.detected.source === 'bambu' ? 'Bambu' : 'Connect') + ' data');
     } else {
-      setText(el.toolCountSource, count + ' fallback · Connect unavailable');
+      setText(el.toolCountSource, count + ' fallback · ' + connectStatusText(toolEditorView));
     }
     updateToolEditorSaveState();
   }

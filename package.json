@@ -2,7 +2,7 @@
   "name": "layer-relay",
   "version": "0.1.0",
   "private": true,
-  "description": "Self-hosted Prusa printer monitoring dashboard with camera, telemetry, BG-code timelines, and an optional OBS overlay.",
+  "description": "Self-hosted Prusa and Bambu Lab printer monitoring dashboard with camera, telemetry, and an optional OBS overlay.",
   "license": "AGPL-3.0-or-later",
   "repository": {
     "type": "git",
@@ -19,6 +19,7 @@
     "prusa",
     "prusaconnect",
     "prusalink",
+    "bambu",
     "rtsp"
   ],
   "engines": {
@@ -37,6 +38,7 @@
     "test": "bun test"
   },
   "dependencies": {
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "mqtt": "^5.15.1"
   }
 }

@@ -448,3 +448,32 @@ test('replace remains successful and consistent when only the backup write fails
     'Tool settings backup could not be updated; the primary save succeeded.',
   ]);
 });
+
+test('Bambu AMS detection retains source labels and per-field overrides in server and browser', async () => {
+  const browser = await import('../pages/app/tool-settings.mjs');
+  const detected = {
+    source: 'bambu', status: 'fresh', toolCount: 4,
+    toolSlots: [
+      { toolLabel: 1, loaded: true, material: 'PLA', color: '#112233' },
+      { toolLabel: 2, loaded: true, material: 'PETG', color: '#445566' },
+      { toolLabel: 3, loaded: false },
+    ],
+  };
+  const overrides = { toolCount: null, toolSlots: {
+    1: { name: 'Custom AMS spool' }, 2: { loaded: false, color: '#aabbcc' },
+  } };
+  for (const status of ['fresh', 'stale', 'unavailable']) {
+    const sample = { ...detected, status };
+    const resolved = resolveToolSettings(overrides, sample);
+    assert.deepEqual(browser.resolveToolSettings(overrides, sample), resolved);
+    assert.deepEqual(browser.normalizeDetectedToolSettings(sample), normalizeDetectedToolSettings(sample));
+    assert.equal(resolved.toolCountSource, 'bambu');
+    assert.equal(resolved.detected.status, status);
+    assert.equal(resolved.toolSlots[0].sources.material, 'bambu');
+    assert.equal(resolved.toolSlots[0].sources.loaded, 'bambu');
+    assert.equal(resolved.toolSlots[0].sources.name, 'override');
+    assert.equal(resolved.toolSlots[1].sources.color, 'override');
+    assert.equal(resolved.toolSlots[1].loaded, false);
+    assert.equal(resolved.toolSlots[1].material, 'PETG');
+  }
+});

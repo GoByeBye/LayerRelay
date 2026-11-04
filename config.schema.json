@@ -3,12 +3,26 @@
   "title": "LayerRelay configuration",
   "type": "object",
   "additionalProperties": false,
-  "required": ["printerHost", "username", "password"],
+  "required": ["printerHost"],
+  "allOf": [{
+    "if": { "properties": { "printerType": { "const": "bambu" } }, "required": ["printerType"] },
+    "then": {
+      "required": ["bambuSerial", "bambuAccessCode"],
+      "properties": {
+        "bambuSerial": { "minLength": 1 },
+        "bambuAccessCode": { "minLength": 1 }
+      }
+    },
+    "else": { "required": ["username", "password"] }
+  }],
   "properties": {
     "$schema": { "type": "string" },
-    "printerHost": { "type": "string", "minLength": 1, "description": "PrusaLink hostname or IP address, without a URL scheme." },
+    "printerType": { "enum": ["prusa", "bambu"], "default": "prusa", "description": "Printer integration. Omitted values preserve the PrusaLink integration." },
+    "printerHost": { "type": "string", "minLength": 1, "description": "Printer hostname or IP address, without a URL scheme. Bambu uses fixed MQTT TLS port 8883." },
     "username": { "type": "string", "minLength": 1, "description": "PrusaLink Digest authentication username." },
     "password": { "type": "string", "minLength": 1, "writeOnly": true, "description": "PrusaLink password. Keep config.json private." },
+    "bambuSerial": { "type": "string", "maxLength": 64, "pattern": "^[A-Za-z0-9]*$", "default": "", "description": "Bambu printer serial number, required for printerType bambu. Letters and digits only." },
+    "bambuAccessCode": { "type": "string", "maxLength": 128, "pattern": "^[^\\s\\u0000-\\u001f\\u007f]*$", "writeOnly": true, "default": "", "description": "Bambu LAN access code, required for printerType bambu. Keep config.json private." },
     "listenHost": { "type": "string", "minLength": 1, "default": "127.0.0.1" },
     "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 8787 },
     "sourceCodeUrl": {

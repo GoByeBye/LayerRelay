@@ -66,20 +66,25 @@ if (runtime) {
     ok('camera relay is disabled; FFmpeg is optional');
   }
 
-  const hasConnectUuid = typeof config.connectPrinterUuid === 'string' && config.connectPrinterUuid.trim() !== '';
-  const hasConnectSeed = typeof config.connectRefreshToken === 'string' && config.connectRefreshToken.trim() !== '';
-  const persistedConnect = readJsonWithBackup(path.join(runtime.dataDir, 'connect-token.json'), null);
-  const hasPersistedConnectToken = typeof persistedConnect?.refresh_token === 'string' &&
-    persistedConnect.refresh_token.trim() !== '';
-  const hasConnectToken = hasPersistedConnectToken || hasConnectSeed;
-  if (config.useConnect === false) {
-    warn('Prusa Connect is explicitly disabled; the PrusaLink-only fallback lacks exact INDX active-tool telemetry');
-  } else if (hasConnectUuid && hasConnectToken) {
-    ok(`Prusa Connect credentials are available from the ${hasPersistedConnectToken ? 'rotated token store' : 'config seed'}`);
-  } else if (hasConnectUuid || hasConnectToken) {
-    warn('Prusa Connect configuration is incomplete; set both connectPrinterUuid and connectRefreshToken (see docs/prusa-connect.md)');
+  if (config.printerType === 'bambu') {
+    ok('Bambu LAN MQTT credentials are configured (TLS port 8883)');
+    ok('PrusaLink and Prusa Connect are unused for this Bambu printer');
   } else {
-    warn('Prusa Connect is not configured; the PrusaLink-only fallback lacks exact INDX active-tool telemetry (see docs/prusa-connect.md)');
+    const hasConnectUuid = typeof config.connectPrinterUuid === 'string' && config.connectPrinterUuid.trim() !== '';
+    const hasConnectSeed = typeof config.connectRefreshToken === 'string' && config.connectRefreshToken.trim() !== '';
+    const persistedConnect = readJsonWithBackup(path.join(runtime.dataDir, 'connect-token.json'), null);
+    const hasPersistedConnectToken = typeof persistedConnect?.refresh_token === 'string' &&
+      persistedConnect.refresh_token.trim() !== '';
+    const hasConnectToken = hasPersistedConnectToken || hasConnectSeed;
+    if (config.useConnect === false) {
+      warn('Prusa Connect is explicitly disabled; the PrusaLink-only fallback lacks exact INDX active-tool telemetry');
+    } else if (hasConnectUuid && hasConnectToken) {
+      ok(`Prusa Connect credentials are available from the ${hasPersistedConnectToken ? 'rotated token store' : 'config seed'}`);
+    } else if (hasConnectUuid || hasConnectToken) {
+      warn('Prusa Connect configuration is incomplete; set both connectPrinterUuid and connectRefreshToken (see docs/prusa-connect.md)');
+    } else {
+      warn('Prusa Connect is not configured; the PrusaLink-only fallback lacks exact INDX active-tool telemetry (see docs/prusa-connect.md)');
+    }
   }
 
   const localListener = isLoopbackHostname(config.listenHost);

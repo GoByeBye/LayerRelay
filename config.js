@@ -2,8 +2,10 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { isIP } = require('node:net');
 
 const DEFAULT_CONFIG = Object.freeze({
+  printerType: 'prusa',
   listenHost: '127.0.0.1',
   port: 8787,
   sourceCodeUrl: 'https://github.com/GoByeBye/LayerRelay',
@@ -28,9 +30,12 @@ const DEFAULT_CONFIG = Object.freeze({
 const ENV_OVERRIDES = Object.freeze({
   LISTEN_HOST: ['listenHost', 'string'],
   PORT: ['port', 'integer'],
+  PRINTER_TYPE: ['printerType', 'string'],
   PRINTER_HOST: ['printerHost', 'string'],
   PRINTER_USERNAME: ['username', 'string'],
   PRINTER_PASSWORD: ['password', 'secret'],
+  BAMBU_SERIAL: ['bambuSerial', 'string'],
+  BAMBU_ACCESS_CODE: ['bambuAccessCode', 'secret'],
   CAMERA_RTSP_URL: ['cameraRtspUrl', 'string'],
   CAMERA_STREAM_ENABLED: ['cameraStreamEnabled', 'boolean'],
   NOZZLE_RTSP_URL: ['nozzleRtspUrl', 'string'],
@@ -40,7 +45,8 @@ const ENV_OVERRIDES = Object.freeze({
 
 const KNOWN_CONFIG_KEYS = new Set([
   '$schema',
-  'printerHost', 'username', 'password', 'listenHost', 'port', 'sourceCodeUrl', 'pollIntervalMs',
+  'printerType', 'printerHost', 'username', 'password', 'bambuSerial', 'bambuAccessCode',
+  'listenHost', 'port', 'sourceCodeUrl', 'pollIntervalMs',
   'analysisCacheMaxEntries', 'analysisCacheMaxBytes', 'printNameOverrides',
   'toolCount', 'toolSlots', 'toolSettingsAllowedOrigins', 'apiReadAllowedOrigins', 'localBgcodeDirs',
   'cameraRtspUrl', 'cameraStreamEnabled', 'cameraFfmpegPath', 'cameraStreamFps',
@@ -83,7 +89,7 @@ const INTEGER_RANGES = Object.freeze({
 });
 
 const OPTIONAL_STRING_KEYS = Object.freeze([
-  '$schema', 'cameraRtspUrl', 'nozzleRtspUrl', 'nozzlePipUrl', 'timelapseUrl', 'cameraFfmpegPath', 'connectPrinterUuid',
+  '$schema', 'bambuSerial', 'bambuAccessCode', 'cameraRtspUrl', 'nozzleRtspUrl', 'nozzlePipUrl', 'timelapseUrl', 'cameraFfmpegPath', 'connectPrinterUuid',
   'connectClientId', 'connectRefreshToken', 'netatmoClientId', 'netatmoClientSecret',
   'netatmoRefreshToken',
 ]);
@@ -168,10 +174,17 @@ function validateConfig(config, { requirePrinter = true } = {}) {
   };
   const plainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
 
+  const printerType = config.printerType === undefined ? 'prusa' : config.printerType;
+  if (!['prusa', 'bambu'].includes(printerType)) errors.push('printerType must be prusa or bambu');
   if (requirePrinter) {
     requiredString('printerHost');
-    requiredString('username');
-    requiredString('password');
+    if (printerType === 'bambu') {
+      requiredString('bambuSerial');
+      requiredString('bambuAccessCode');
+    } else {
+      requiredString('username');
+      requiredString('password');
+    }
   }
   requiredString('sourceCodeUrl');
 
@@ -203,7 +216,23 @@ function validateConfig(config, { requirePrinter = true } = {}) {
   if (typeof config.printerHost === 'string' && /\s/.test(config.printerHost)) {
     errors.push('printerHost must not contain whitespace');
   }
-  if (typeof config.password === 'string' && /^replace-with-/i.test(config.password.trim())) {
+  if (printerType === 'bambu') {
+    if (typeof config.printerHost === 'string' &&
+        !isIP(config.printerHost) && !/^(?=.{1,253}\.?$)[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.?$/i.test(config.printerHost)) {
+      errors.push('printerHost must be a hostname or IP address without a port, path, or credentials for Bambu');
+    }
+    if (typeof config.bambuSerial === 'string' && config.bambuSerial !== '' && !/^[a-z0-9]{1,64}$/i.test(config.bambuSerial)) {
+      errors.push('bambuSerial must contain only letters and digits (at most 64)');
+    }
+    if (typeof config.bambuAccessCode === 'string' && config.bambuAccessCode !== '' &&
+        (/\s|[\u0000-\u001f\u007f]/.test(config.bambuAccessCode) || config.bambuAccessCode.length > 128)) {
+      errors.push('bambuAccessCode must be at most 128 characters without whitespace or control characters');
+    }
+    if (typeof config.bambuAccessCode === 'string' && /^replace-with-/i.test(config.bambuAccessCode)) {
+      errors.push('bambuAccessCode still contains the example placeholder');
+    }
+  }
+  if (printerType !== 'bambu' && typeof config.password === 'string' && /^replace-with-/i.test(config.password.trim())) {
     errors.push('password still contains the example placeholder');
   }
   if (typeof config.cameraRtspUrl === 'string' && config.cameraRtspUrl !== config.cameraRtspUrl.trim()) {
@@ -394,7 +423,7 @@ function loadRuntimeConfig(options = {}) {
   )) {
     throw new Error(
       `No configuration found at ${configPath}. Run bun run setup, copy config.example.json, ` +
-      'or provide PRINTER_HOST, PRINTER_USERNAME, and PRINTER_PASSWORD.',
+      'or provide PRINTER_HOST and the selected printer type\'s credentials.',
     );
   }
   const mergedConfig = { ...DEFAULT_CONFIG, ...(fileConfig || {}) };

@@ -20,6 +20,14 @@ disclosure is informational: it does not change the project's
 disclosure is not a substitute for documenting the source and license of copied,
 adapted, generated, or vendored material.
 
+On 2026-11-04, OpenAI Codex assisted with the original Bambu Lab LAN adapter,
+its configuration and server integration, synthetic protocol tests, and
+documentation. Protocol field names and units were checked against public
+Bambu Studio sources linked in the [Bambu Lab guide](docs/bambu-lab.md). No
+Bambu Studio source code or proprietary networking plugin is included or
+copied into the adapter. Bambu Lab names identify compatibility targets and
+do not imply endorsement or official support.
+
 ## OpenPrintTag Material Database data
 
 The optional filament picker refreshes generated public material and brand
@@ -143,8 +151,9 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ## Runtime dependencies
 
-The locked production dependency graph was inventoried during the 2026-07-19
-release audit. Its packages declare MIT, ISC, or BSD-3-Clause licenses, all
+The locked production dependency graph was inventoried on 2026-11-04 after
+adding [MQTT.js](https://github.com/mqttjs/MQTT.js) (MIT, locked at 5.16.1) for
+Bambu LAN telemetry. Its packages declare MIT, ISC, BSD-3-Clause, or 0BSD licenses, all
 compatible with distribution of this combined work under the GNU AGPL. Their
 declared license metadata and any bundled license files remain included with
 installed dependencies.

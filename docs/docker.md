@@ -36,7 +36,11 @@ cp config.example.json config.json
 chmod 600 config.json
 ```
 
-Edit `config.json` and set at least `printerHost`, `username`, and `password`.
+For Prusa, edit `config.json` and set at least `printerHost`, `username`, and
+`password`. For Bambu Lab, set `printerType` to `"bambu"`, `printerHost` to the
+printer's LAN IP, and fill in `bambuSerial` and `bambuAccessCode`. PrusaLink and
+Prusa Connect credentials are unused for Bambu. See the
+[Bambu setup guide](bambu-lab.md) for LAN and firmware requirements.
 Set `cameraRtspUrl` and set `cameraStreamEnabled` to `true` if the integrated
 camera relay should be enabled. Alternatively, remove `cameraStreamEnabled`
 from the copied template so a non-empty camera URL enables it automatically.
@@ -126,9 +130,20 @@ defaults to `/data`. These two canonical container paths keep `docker exec`
 diagnostics consistent; their `LAYER_RELAY_*` aliases are intended for native
 installs rather than container path remapping.
 
+For environment-only use with `docker run`, omit the configuration bind mount
+and pass `PRINTER_HOST` plus the selected printer's credentials. Prusa uses
+`PRINTER_USERNAME` and `PRINTER_PASSWORD`; Bambu uses `PRINTER_TYPE=bambu`,
+`BAMBU_SERIAL`, and `BAMBU_ACCESS_CODE`. Their `LAYER_RELAY_` prefixed aliases are
+also supported. Supply secrets from a private environment file or secret manager.
+The supplied Compose file expects the mounted configuration file.
+
 The named `overlay-data` volume is mounted at `/data`. It contains cached print
 analysis, last-known state and Connect tool inventory, dashboard tool overrides,
 the normalized OpenPrintTag suggestion index, and any rotated cloud refresh tokens.
+For Bambu, these files are isolated beneath `/data/bambu-<id>`, where `<id>` is
+the first 16 hexadecimal characters of the serial number's SHA-256 hash. This
+keeps previous Prusa state and other Bambu printers' state separate; the raw
+serial number is not used as a directory name.
 `docker compose down` preserves it. Do not use `docker compose down -v`
 unless discarding that state and the persisted cloud tokens is intentional.
 For Prusa Connect, the rotated token in `/data/connect-token.json` takes

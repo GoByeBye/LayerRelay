@@ -6,7 +6,7 @@ ARG VCS_REF=""
 ARG SOURCE_CODE_URL="https://github.com/GoByeBye/LayerRelay"
 
 LABEL org.opencontainers.image.title="LayerRelay" \
-    org.opencontainers.image.description="Self-hosted Prusa printer monitoring dashboard with camera, telemetry, BG-code timelines, and an optional OBS overlay" \
+    org.opencontainers.image.description="Self-hosted Prusa and Bambu Lab printer monitoring dashboard with camera, telemetry, and an optional OBS overlay" \
     org.opencontainers.image.source="${SOURCE_CODE_URL}" \
     org.opencontainers.image.revision="${VCS_REF}" \
     org.opencontainers.image.licenses="AGPL-3.0-or-later"
