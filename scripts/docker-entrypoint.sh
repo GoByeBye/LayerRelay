@@ -32,10 +32,22 @@ if [ -f "$source_path" ]; then
   fi
   mv -f -- "$temporary_path" "$runtime_path"
   gosu bun:bun test -r "$runtime_path" || fail "the staged configuration is not readable by the bun user"
-elif [ -z "${PRINTER_HOST:-${LAYER_RELAY_PRINTER_HOST:-}}" ] ||
-     [ -z "${PRINTER_USERNAME:-${LAYER_RELAY_PRINTER_USERNAME:-}}" ] ||
-     [ -z "${PRINTER_PASSWORD:-${LAYER_RELAY_PRINTER_PASSWORD:-}}" ]; then
-  fail "no configuration file exists at $source_path and the required PRINTER_* variables are incomplete"
+else
+  [ -n "${PRINTER_HOST:-${LAYER_RELAY_PRINTER_HOST:-}}" ] ||
+    fail "no configuration file exists at $source_path and PRINTER_HOST is missing"
+  case "${PRINTER_TYPE:-${LAYER_RELAY_PRINTER_TYPE:-prusa}}" in
+    prusa)
+      [ -n "${PRINTER_USERNAME:-${LAYER_RELAY_PRINTER_USERNAME:-}}" ] &&
+        [ -n "${PRINTER_PASSWORD:-${LAYER_RELAY_PRINTER_PASSWORD:-}}" ] ||
+        fail "Prusa environment-only startup requires PRINTER_USERNAME and PRINTER_PASSWORD"
+      ;;
+    bambu)
+      [ -n "${BAMBU_SERIAL:-${LAYER_RELAY_BAMBU_SERIAL:-}}" ] &&
+        [ -n "${BAMBU_ACCESS_CODE:-${LAYER_RELAY_BAMBU_ACCESS_CODE:-}}" ] ||
+        fail "Bambu environment-only startup requires BAMBU_SERIAL and BAMBU_ACCESS_CODE"
+      ;;
+    *) fail "PRINTER_TYPE must be prusa or bambu" ;;
+  esac
 fi
 
 [ -d "$data_dir" ] || fail "the runtime data directory does not exist: $data_dir"

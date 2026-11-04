@@ -32,6 +32,7 @@ const {
 } = require('./job-lifecycle.js');
 const { createLatestWork } = require('./latest-work.js');
 const { CameraStream } = require('./camera-stream.js');
+const { BambuClient } = require('./bambu.js');
 const { pruneAnalysisCache } = require('./cache-retention.js');
 const { preferredPrintName } = require('./print-name.js');
 const { sampleHealth, selectTelemetrySource } = require('./telemetry-freshness.js');
@@ -60,6 +61,7 @@ const {
 
 const runtimeConfig = loadRuntimeConfig({ rootDir: __dirname });
 const cfg = runtimeConfig.config;
+const bambuEnabled = cfg.printerType === 'bambu';
 const sourceCodeUrl = new URL(cfg.sourceCodeUrl).href;
 const cameraStream = new CameraStream(cfg);
 // The nozzle camera reuses the primary relay logic with its own RTSP source and a
@@ -84,7 +86,11 @@ function nozzleCameraConfig(config) {
   };
 }
 const nozzleStream = new CameraStream(nozzleCameraConfig(cfg));
-const CACHE_DIR = runtimeConfig.dataDir;
+// Keep a newly selected Bambu printer from restoring a different printer's job,
+// credentials, or inventory. Existing Prusa deployments retain their data path.
+const CACHE_DIR = bambuEnabled
+  ? path.join(runtimeConfig.dataDir, `bambu-${crypto.createHash('sha256').update(cfg.bambuSerial).digest('hex').slice(0, 16)}`)
+  : runtimeConfig.dataDir;
 fs.mkdirSync(CACHE_DIR, { recursive: true, mode: 0o700 });
 if (process.platform !== 'win32') {
   try { fs.chmodSync(CACHE_DIR, 0o700); } catch { /* Best effort for bind mounts and network filesystems. */ }
@@ -127,7 +133,7 @@ const LASTSTATE_WRITE_MS = Math.max(5000, Number(cfg.lastStateWriteMs) || 10000)
 // Prusa Connect (cloud): authoritative source for the INDX active tool + full live telemetry.
 // Inert unless a refresh token AND printer uuid are configured, so the local-only path is unaffected.
 const connectAuth = new ConnectAuth(cfg, CONNECT_TOKEN_FILE);
-const connectEnabled = connectAuth.hasCredentials() && !!cfg.connectPrinterUuid && cfg.useConnect !== false;
+const connectEnabled = !bambuEnabled && connectAuth.hasCredentials() && !!cfg.connectPrinterUuid && cfg.useConnect !== false;
 const connectPrinterIdentity = typeof cfg.connectPrinterUuid === 'string' && cfg.connectPrinterUuid.trim()
   ? cfg.connectPrinterUuid.trim() : null;
 let connectLive = null;       // last mapped Connect telemetry (see mapConnectToState)
@@ -180,6 +186,9 @@ let activeJobSnapshot = null;
 let completedJob = null;
 let completedJobDirty = false;
 let restoredCompletedJob = null;
+let bambuToolInventory = null;
+let bambuToolInventoryAt = 0;
+const bambuClient = bambuEnabled ? new BambuClient(cfg) : null;
 
 // Restore the last-known frame so a restart while the printer is down still shows
 // (grayed-out) data rather than an empty card.
@@ -437,6 +446,35 @@ function observeJobLifecycle(nextState) {
   } else if (activeJobSnapshot && shouldFinalizeJobSnapshot(nextState.state)) {
     finishActiveSnapshot(nextState.state || 'FINISHED');
   }
+}
+
+if (bambuClient) {
+  bambuClient.on('telemetry', (value) => {
+    const { toolInventory, ...telemetry } = value;
+    if (toolInventory !== undefined) {
+      bambuToolInventory = toolInventory;
+      bambuToolInventoryAt = Math.floor(Date.now() / 1000);
+    }
+    state = {
+      ...telemetry,
+      name: preferredPrintName(cleanName(telemetry.name), null, printNameOverrideFor(telemetry.jobKey)),
+    };
+    lastGoodAt = Math.floor(Date.now() / 1000);
+    printerOnline = true;
+    if (activeJobSnapshot && shouldFinalizeJobSnapshot(state.state) &&
+        jobIdentity(activeJobSnapshot) === jobIdentity(state)) {
+      // A full terminal report may omit the old job metadata. Keep the known
+      // summary while accepting final progress/layer values that were reported.
+      for (const [key, value] of Object.entries(state)) {
+        if (value != null && value !== '') activeJobSnapshot[key] = value;
+      }
+    }
+    observeJobLifecycle(state);
+    persistLastState();
+  });
+  bambuClient.on('offline', () => { printerOnline = false; });
+  // Adapter errors are fixed, credential-safe messages; never log MQTT options.
+  bambuClient.on('error', (error) => { console.error(`[bambu] ${error.message}`); });
 }
 
 // During an INDX swap the nozzle craters, then reheats. Track that window against
@@ -921,7 +959,7 @@ async function netatmoPollLoop() {
 // values and the active tool; the local bgcode analysis still owns swap/waste TOTALS (Connect
 // doesn't expose them), so swap/waste counts are recomputed from Connect's progress %.
 function mergeConnect(base, nowSec = Math.floor(Date.now() / 1000)) {
-  const localHealth = sampleHealth(lastGoodAt, printerOnline, nowSec);
+  const localHealth = sampleHealth(lastGoodAt, printerOnline, nowSec, bambuEnabled ? 30 : 8);
   const connectHealth = sampleHealth(connectLastGoodAt, connectOnline, nowSec);
   const source = selectTelemetrySource(localHealth, connectHealth, connectEnabled && !!connectLive);
   if (source === 'local') {
@@ -1072,6 +1110,15 @@ app.get('/source', (_req, res) => {
 });
 
 function currentToolDetection(nowSec = Math.floor(Date.now() / 1000)) {
+  if (bambuEnabled) {
+    const health = sampleHealth(bambuToolInventoryAt, printerOnline, nowSec, 30);
+    return {
+      source: 'bambu',
+      status: bambuToolInventory ? (health.online ? 'fresh' : 'stale') : 'unavailable',
+      toolCount: bambuToolInventory?.toolCount ?? null,
+      toolSlots: bambuToolInventory?.toolSlots || [],
+    };
+  }
   if (!connectToolInventory) {
     return { source: null, status: 'unavailable', toolCount: null, toolSlots: [] };
   }
@@ -1214,6 +1261,7 @@ app.get('/api/state', (_req, res) => {
   const toolSettings = currentToolSettingsView(out && out.toolLabel, toolSettingsStore.get(), nowSec);
   res.json({
     ...out,
+    printerType: cfg.printerType,
     online,
     staleSec,
     updatedAt: nowSec,
@@ -1310,11 +1358,16 @@ const httpServer = app.listen(listenPort, listenHost, () => {
   console.log(`nozzle relay:          ${nozzleStream.enabled ? `http://${listenHost}:${listenPort}/api/nozzle.mjpeg` : 'disabled (set nozzleRtspUrl in config.json)'}`);
   console.log(`corresponding source:  ${sourceCodeUrl}`);
   console.log(`configuration:         ${runtimeConfig.source}; state: ${CACHE_DIR}`);
-  pollLoop();
+  if (bambuClient) {
+    console.log('bambu lab:             local LAN MQTT telemetry');
+    bambuClient.start();
+  } else {
+    pollLoop();
+  }
   if (connectEnabled) {
     console.log(`prusa connect:         polling configured printer every ${(cfg.connectPollMs || 5000) / 1000}s`);
     connectPollLoop();
-  } else {
+  } else if (!bambuEnabled) {
     console.log('prusa connect:         disabled (set connectRefreshToken + connectPrinterUuid in config.json)');
   }
   if (netatmoEnabled) {
@@ -1331,10 +1384,11 @@ function stopServer() {
   stopping = true;
   cameraStream.close();
   nozzleStream.close();
+  if (bambuClient) bambuClient.close();
   httpServer.close(() => process.exit(0));
   const forceExit = setTimeout(() => process.exit(1), 5000);
   if (typeof forceExit.unref === 'function') forceExit.unref();
 }
 process.once('SIGINT', stopServer);
 process.once('SIGTERM', stopServer);
-process.once('exit', () => { cameraStream.close(); nozzleStream.close(); });
+process.once('exit', () => { cameraStream.close(); nozzleStream.close(); if (bambuClient) bambuClient.close(); });

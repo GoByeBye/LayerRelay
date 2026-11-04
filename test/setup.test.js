@@ -43,3 +43,23 @@ test('setup honors LAYER_RELAY_CONFIG for an external private path', () => {
   assert.equal(fs.existsSync(new URL(config.$schema)), true);
   assert.match(result.stdout, /custom path is outside the repository/);
 });
+
+test('setup creates a Bambu template without Prusa credentials and preserves an existing file', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'layer-relay-setup-bambu-'));
+  const configPath = path.join(directory, 'private.json');
+  onTestFinished(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const args = [setupScript, '--non-interactive', '--printer-type', 'bambu', '--config', configPath];
+  const result = spawnSync(process.execPath, args, { cwd: rootDir, encoding: 'utf8' });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  const contents = fs.readFileSync(configPath, 'utf8');
+  const config = JSON.parse(contents);
+  assert.equal(config.printerType, 'bambu');
+  assert.equal(config.useConnect, false);
+  assert.equal(config.username, undefined);
+  assert.equal(config.password, undefined);
+  assert.equal(config.bambuAccessCode, '');
+  assert.match(result.stdout, /Set bambuSerial and bambuAccessCode/);
+  const repeated = spawnSync(process.execPath, args, { cwd: rootDir, encoding: 'utf8' });
+  assert.equal(repeated.status, 0);
+  assert.equal(fs.readFileSync(configPath, 'utf8'), contents);
+});

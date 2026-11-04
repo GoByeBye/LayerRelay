@@ -2,20 +2,24 @@
   <img src="docs/assets/banner.webp" width="960" alt="LayerRelay hand-drawn logo: a printer toolpath flowing into a camera beside the LayerRelay wordmark">
 </p>
 
-# LayerRelay — Prusa printer monitoring dashboard
+# LayerRelay — 3D printer monitoring dashboard
 
-A self-hosted monitoring dashboard for Prusa printers, with an optional OBS
-browser overlay. LayerRelay combines a printer camera feed, local PrusaLink
-telemetry, recommended Prusa Connect telemetry, decoded `.bgcode` timelines,
-and optional Netatmo room temperature. The same page can run as a normal browser
-dashboard, a full 1080p OBS view, or a transparent lower-third overlay.
+A self-hosted monitoring dashboard for Prusa and Bambu Lab printers, with an
+optional OBS browser overlay. LayerRelay combines a printer camera feed,
+PrusaLink and optional Prusa Connect telemetry or local Bambu Lab MQTT telemetry,
+and optional Netatmo room temperature. Prusa jobs can also use decoded `.bgcode`
+timelines. The same page can run as a normal browser dashboard, a full 1080p OBS
+view, or a transparent lower-third overlay.
 
 The project is developed against a **Prusa CORE One with an INDX toolchanger**.
 Basic telemetry should be useful with other PrusaLink printers, but their state,
-camera, and G-code behavior still needs community testing.
+camera, and G-code behavior still needs community testing. Bambu Lab LAN support
+is experimental and has automated protocol coverage; real printer and firmware
+combinations still need community testing. See the [Bambu Lab guide](docs/bambu-lab.md).
 
-The printer integrations are display-only: they read printer APIs with `GET`
-requests and have no pause, stop, movement, temperature, or upload controls.
+The printer integrations are display-only: Prusa APIs use `GET` requests; Bambu
+Lab subscribes to telemetry and publishes a status-snapshot request. There are
+no pause, stop, movement, temperature, or upload controls.
 The local dashboard can write only its own non-secret tool inventory.
 That describes this project's behavior, not the authority of a Prusa web-client
 refresh token, which may carry broader account permissions; see the
@@ -58,13 +62,13 @@ refresh token, which may carry broader account permissions; see the
 
 | Component | Required? | Expectation |
 |---|---|---|
-| Prusa printer | Yes | A network-reachable printer exposing PrusaLink, with a Digest username and password. v0.1.0 is developed and tested with a Prusa CORE One and INDX toolchanger. Other PrusaLink models and firmware combinations are not yet verified; no minimum firmware version is claimed. |
+| Printer | Yes | A network-reachable PrusaLink printer with Digest credentials, or a Bambu Lab printer exposing local MQTT with its serial number and LAN access code. Prusa CORE One/INDX is the development hardware; other combinations need community testing. See the [Bambu Lab guide](docs/bambu-lab.md) for firmware and feature boundaries. |
 | Prusa Connect account | Recommended for CORE One/INDX | Supplies the exact active tool and richer live telemetry that PrusaLink lacks. The overlay falls back to PrusaLink when Connect is not configured or unavailable. |
 | [Bun](https://bun.com/docs/installation) | Native installs | Bun 1.3.14 or newer in the supported 1.x line (`>=1.3.14 <2`). The Docker image includes Bun. |
 | Camera | No | Integrated video requires a reachable `rtsp://` or `rtsps://` stream. Without one, telemetry and the transparent overlay still work and the camera relay remains off. |
 | FFmpeg | Camera relay/snapshot only | Native installs need FFmpeg at `cameraFfmpegPath` or on `PATH` for the relay and snapshot helper. The Docker image includes FFmpeg. |
 | OBS Studio | No | Needed only for an OBS Browser Source. No minimum OBS version is claimed. Use 1920 x 1080 for the full dashboard or 1920 x 420 for the camera-free lower third. A normal browser can display the dashboard without OBS. |
-| Network access | Yes | The host must reach PrusaLink and, when enabled, the RTSP camera. Prusa Connect, optional Netatmo, and OpenPrintTag snapshot refreshes require outbound internet access. LayerRelay loads its last valid snapshot at startup and refreshes a missing or stale snapshot in the background with fixed requests. Picker searches are synchronous and local; picker text is never sent upstream or persisted. Manual tool editing remains usable while suggestions load or during an outage. |
+| Network access | Yes | The host must reach PrusaLink or the Bambu Lab MQTT broker and, when enabled, the RTSP camera. Prusa Connect, optional Netatmo, and OpenPrintTag snapshot refreshes require outbound internet access. LayerRelay loads its last valid snapshot at startup and refreshes a missing or stale snapshot in the background with fixed requests. Picker searches are synchronous and local; picker text is never sent upstream or persisted. Manual tool editing remains usable while suggestions load or during an outage. |
 
 Clone the repository and enter its directory first:
 
@@ -87,16 +91,17 @@ bun run start
 ```
 
 Setup creates the ignored `config.json` without overwriting an existing one. In
-an interactive terminal it asks for the PrusaLink credentials, optional RTSP
-URL, recommended Prusa Connect UUID and hidden refresh token, and an optional
-manual tool-count override. Leave the count on `auto` to follow Connect.
+an interactive terminal it asks for the printer type and its credentials,
+an optional RTSP URL, and an optional manual tool-count override. For Prusa it
+also offers Prusa Connect UUID and refresh-token setup. Leave the count on
+`auto` to follow detected inventory.
 
 Open <http://localhost:8787/> after startup. For a container install, use the
 [Docker guide](docs/docker.md); Compose publishes the service on host loopback
 by default.
 
 Move the pointer to reveal **Dashboard**, then choose **Tools & filament**.
-Tool count, loaded/empty state, and material follow Prusa Connect automatically
+Tool count, loaded/empty state, and material follow detected printer inventory automatically
 when that inventory is available. Count, presence, name, and colour can be
 overridden independently and returned to **Auto** later. **Auto type** preserves
 the selected colour until **Auto color** is chosen. Changes take
@@ -107,20 +112,40 @@ OpenPrintTag material and brand snapshots. Startup loads
 snapshot in the background. Custom names and colours remain usable while that
 initial refresh runs or whenever OpenPrintTag is unavailable.
 
+### Bambu Lab LAN setup
+
+Choose Bambu Lab in `bun run setup`, or set `printerType` to `bambu`,
+`printerHost` to the printer's LAN IP or hostname, and provide `bambuSerial` and
+`bambuAccessCode` in `config.json`. LayerRelay keeps one TLS MQTT connection to
+port 8883 and uses the existing dashboard and OBS overlay for live state,
+progress, remaining time, temperatures, layers, and AMS inventory when reported.
+
+The printer must expose local MQTT. Enable LAN Only Mode and, where required
+and offered by the model and firmware, Developer Mode. The server accepts the
+printer's local certificate without CA verification, so use a trusted LAN.
+The [Bambu Lab guide](docs/bambu-lab.md) covers setup, optional model-specific
+RTSPS cameras, and limitations. Bambu cloud login, 3MF analysis, thumbnails, and
+the native P1/A1 JPEG camera protocol are not implemented. A static Pages
+dashboard can use a LayerRelay server bridge; it cannot connect directly to
+Bambu Lab MQTT.
+
 ## Configuration
 
 `config.example.json` is the safe starting point, and `config.schema.json`
-documents the complete configuration shape for editors and validation. At
-minimum, set `printerHost`, `username`, and `password`.
+documents the complete configuration shape for editors and validation. For
+Prusa (the default), set `printerHost`, `username`, and `password`. For Bambu
+Lab, set `printerType: "bambu"`, `printerHost`, `bambuSerial`, and `bambuAccessCode`.
 
 The main settings are:
 
 | Setting | Purpose |
 |---|---|
+| `printerType` | `prusa` (default) for PrusaLink/Connect, or `bambu` for local Bambu Lab MQTT. |
+| `bambuSerial` / `bambuAccessCode` | Bambu Lab serial number and secret LAN access code; used only by the server. |
 | `listenHost` / `port` | Local HTTP listener. Keep `127.0.0.1` unless another machine must read the overlay. |
 | `pollIntervalMs` | Local PrusaLink cadence. `2000` is the safe default for the printer's Buddy board. |
 | `sourceCodeUrl` | Corresponding-source URL offered in the dashboard and HTTP `Link` header. Modified deployments must point it at their exact source. |
-| `toolCount` / `toolSlots` | Optional inventory overrides. `toolCount: null` and omitted slot fields follow Prusa Connect; explicit dashboard values persist in `DATA_DIR/tool-settings.json`. |
+| `toolCount` / `toolSlots` | Optional inventory overrides. `toolCount: null` and omitted slot fields follow detected printer inventory; explicit dashboard values persist in `DATA_DIR/tool-settings.json`. |
 | `toolSettingsAllowedOrigins` | Exact extra browser origins allowed to save tool settings through a named host or authenticated reverse proxy. Loopback and literal IP origins need no entry. |
 | `localBgcodeDirs` | Folders searched for a matching `.bgcode` before downloading it from the printer. |
 | `printNameOverrides` | Optional exact `jobKey` to display-name map for slicer files that expose only placeholders such as `Merged`. |
@@ -251,6 +276,7 @@ not an extrusion timeline.
 | `server.js` | Poll orchestration, state merging, persistence, HTTP API, and static files |
 | `camera-stream.js` | One-upstream RTSP-to-MJPEG relay, client fanout, and FFmpeg lifecycle |
 | `digest.js` | PrusaLink HTTP Digest client |
+| `bambu.js` | Local Bambu Lab MQTT connection and telemetry mapping |
 | `prusaconnect.js` | Recommended Prusa Connect OAuth and telemetry mapping |
 | `netatmo.js` | Optional Netatmo OAuth and station mapping |
 | `bgcode.js` | `.bgcode` container and G-code decoder |

@@ -171,7 +171,7 @@ function cleanDetectedText(value, maxLength) {
 
 function normalizeDetectedToolSettings(input) {
   const value = plainObject(input) ? input : {};
-  const source = value.source === 'connect' ? 'connect' : null;
+  const source = ['connect', 'bambu'].includes(value.source) ? value.source : null;
   const status = ['fresh', 'stale', 'unavailable'].includes(value.status)
     ? value.status : (source ? 'stale' : 'unavailable');
   const rawSlots = value.toolSlots;
@@ -289,7 +289,7 @@ function resolveToolSettings(settings, detected, options = {}) {
     : automatic.toolCount != null ? automatic.toolCount : Math.max(1, highestOverride);
   const toolCount = Math.min(MAX_TOOLS, Math.max(baseCount, minimum));
   const toolCountSource = overrides.toolCount != null
-    ? 'override' : automatic.toolCount != null ? 'connect' : 'fallback';
+    ? 'override' : automatic.toolCount != null ? automatic.source || 'connect' : 'fallback';
   const detectedByLabel = new Map(automatic.toolSlots.map((slot) => [slot.toolLabel, slot]));
 
   const toolSlots = Array.from({ length: toolCount }, (_, toolIndex) => {
@@ -312,10 +312,10 @@ function resolveToolSettings(settings, detected, options = {}) {
       material,
       color,
       sources: {
-        loaded: loadedOverridden ? 'override' : typeof auto.loaded === 'boolean' ? 'connect' : 'none',
-        name: nameOverridden ? 'override' : auto.name ? 'connect' : 'none',
-        material: auto.material ? 'connect' : 'none',
-        color: colorOverridden ? 'override' : auto.color ? 'connect' : 'none',
+        loaded: loadedOverridden ? 'override' : typeof auto.loaded === 'boolean' ? automatic.source || 'connect' : 'none',
+        name: nameOverridden ? 'override' : auto.name ? automatic.source || 'connect' : 'none',
+        material: auto.material ? automatic.source || 'connect' : 'none',
+        color: colorOverridden ? 'override' : auto.color ? automatic.source || 'connect' : 'none',
       },
     };
   });

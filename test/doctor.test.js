@@ -79,6 +79,22 @@ test('doctor warns when read APIs and camera images bind beyond loopback', () =>
   assert.match(result.stderr, /listener is not loopback; read APIs and camera images may be reachable remotely/);
 });
 
+test('doctor recognizes Bambu configuration without irrelevant Prusa warnings or printing credentials', () => {
+  const directory = temporaryDirectory();
+  const result = spawnSync(process.execPath, [doctorScript], {
+    cwd: rootDir,
+    env: doctorEnvironment(directory, {
+      PRINTER_TYPE: 'bambu', BAMBU_SERIAL: 'EXAMPLE123456', BAMBU_ACCESS_CODE: 'SECRET_TEST_CODE',
+      PRINTER_USERNAME: '', PRINTER_PASSWORD: '', PORT: '1',
+    }),
+    encoding: 'utf8',
+  });
+  const output = `${result.stdout}\n${result.stderr}`;
+  assert.equal(result.status, 0, output);
+  assert.match(result.stdout, /Bambu LAN MQTT credentials are configured/);
+  assert.doesNotMatch(output, /SECRET_TEST_CODE|EXAMPLE123456|Prusa Connect is not configured|PrusaLink-only fallback/);
+});
+
 test('doctor probes an IPv6 loopback listener when configured', async () => {
   const directory = temporaryDirectory();
   const server = http.createServer((req, res) => {

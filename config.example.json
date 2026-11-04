@@ -1,8 +1,11 @@
 {
   "$schema": "./config.schema.json",
+  "printerType": "prusa",
   "printerHost": "192.0.2.10",
   "username": "maker",
   "password": "replace-with-your-prusalink-password",
+  "bambuSerial": "",
+  "bambuAccessCode": "",
   "listenHost": "127.0.0.1",
   "port": 8787,
   "sourceCodeUrl": "https://github.com/GoByeBye/LayerRelay",

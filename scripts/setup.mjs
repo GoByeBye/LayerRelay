@@ -57,6 +57,11 @@ if (fs.existsSync(configPath)) {
 }
 
 const config = JSON.parse(fs.readFileSync(examplePath, 'utf8'));
+const requestedPrinterType = argumentValue('--printer-type');
+if (requestedPrinterType && !['prusa', 'bambu'].includes(requestedPrinterType)) {
+  throw new Error('--printer-type must be prusa or bambu');
+}
+if (requestedPrinterType) config.printerType = requestedPrinterType;
 if (configPath !== defaultConfigPath) {
   // A relative schema reference would resolve beside the external credentials
   // file instead of beside this checkout. Keep editor completion working.
@@ -73,37 +78,53 @@ if (!nonInteractive) {
   const rl = readline.createInterface({ input: process.stdin, output, terminal: true });
 
   try {
+    const printerType = (await rl.question(`Printer type (prusa or bambu) [${config.printerType}]: `)).trim();
+    if (printerType) config.printerType = printerType.toLowerCase();
+    if (!['prusa', 'bambu'].includes(config.printerType)) throw new Error('Printer type must be prusa or bambu');
+
     const host = (await rl.question(`Printer hostname or IP [${config.printerHost}]: `)).trim();
     if (host) config.printerHost = host;
 
-    const username = (await rl.question(`PrusaLink username [${config.username}]: `)).trim();
-    if (username) config.username = username;
+    if (config.printerType === 'bambu') {
+      config.bambuSerial = (await rl.question('Bambu printer serial number: ')).trim();
+      process.stdout.write('Bambu LAN access code (input is hidden): ');
+      output.muted = true;
+      config.bambuAccessCode = await rl.question('');
+      output.muted = false;
+      process.stdout.write('\n');
+      if (!config.bambuAccessCode) throw new Error('Bambu LAN access code cannot be empty');
+    } else {
+      const username = (await rl.question(`PrusaLink username [${config.username}]: `)).trim();
+      if (username) config.username = username;
 
-    process.stdout.write('PrusaLink password (input is hidden): ');
-    output.muted = true;
-    config.password = await rl.question('');
-    output.muted = false;
-    process.stdout.write('\n');
-    if (!config.password) throw new Error('PrusaLink password cannot be empty');
+      process.stdout.write('PrusaLink password (input is hidden): ');
+      output.muted = true;
+      config.password = await rl.question('');
+      output.muted = false;
+      process.stdout.write('\n');
+      if (!config.password) throw new Error('PrusaLink password cannot be empty');
+    }
 
     const cameraUrl = (await rl.question('Camera RTSP URL (optional): ')).trim();
     config.cameraRtspUrl = cameraUrl;
     config.cameraStreamEnabled = cameraUrl !== '';
 
-    process.stdout.write(
-      '\nPrusa Connect is recommended for complete CORE One/INDX telemetry.\n' +
-      'Capture a dedicated refresh token first: docs/prusa-connect.md\n',
-    );
-    const connectUuid = (await rl.question('Prusa Connect printer UUID (recommended; leave blank for PrusaLink-only): ')).trim();
-    if (connectUuid) {
-      config.connectPrinterUuid = connectUuid;
-      process.stdout.write('Prusa Connect refresh token (input is hidden): ');
-      output.muted = true;
-      config.connectRefreshToken = (await rl.question('')).trim();
-      output.muted = false;
-      process.stdout.write('\n');
-      if (!config.connectRefreshToken) {
-        throw new Error('Prusa Connect refresh token cannot be empty when a printer UUID is configured');
+    if (config.printerType === 'prusa') {
+      process.stdout.write(
+        '\nPrusa Connect is recommended for complete CORE One/INDX telemetry.\n' +
+        'Capture a dedicated refresh token first: docs/prusa-connect.md\n',
+      );
+      const connectUuid = (await rl.question('Prusa Connect printer UUID (recommended; leave blank for PrusaLink-only): ')).trim();
+      if (connectUuid) {
+        config.connectPrinterUuid = connectUuid;
+        process.stdout.write('Prusa Connect refresh token (input is hidden): ');
+        output.muted = true;
+        config.connectRefreshToken = (await rl.question('')).trim();
+        output.muted = false;
+        process.stdout.write('\n');
+        if (!config.connectRefreshToken) {
+          throw new Error('Prusa Connect refresh token cannot be empty when a printer UUID is configured');
+        }
       }
     }
 
@@ -126,8 +147,14 @@ if (!nonInteractive) {
     output.muted = false;
     rl.close();
   }
-  require('../config.js').validateConfig(config);
 }
+
+if (config.printerType === 'bambu') {
+  delete config.username;
+  delete config.password;
+  config.useConnect = false;
+}
+if (!nonInteractive) require('../config.js').validateConfig(config);
 
 fs.mkdirSync(path.dirname(configPath), { recursive: true });
 fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
@@ -143,6 +170,10 @@ if (configPath === defaultConfigPath) {
 }
 if (nonInteractive) {
   console.log('Edit the printer credentials and optional camera settings before starting.');
-  console.log('For complete CORE One/INDX telemetry, also configure Prusa Connect using docs/prusa-connect.md.');
+  if (config.printerType === 'bambu') {
+    console.log('Set bambuSerial and bambuAccessCode, and enable LAN access on the printer.');
+  } else {
+    console.log('For complete CORE One/INDX telemetry, also configure Prusa Connect using docs/prusa-connect.md.');
+  }
 }
 console.log('Next: bun run doctor, then bun run start (or docker compose up -d --build).');

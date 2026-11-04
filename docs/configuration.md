@@ -20,13 +20,13 @@ path when its exclusion and permissions are deliberately managed.
 
 `config.example.json` contains sanitized values for every supported JSON setting.
 
-Treat credential-bearing fields as secrets: `password`, `connectRefreshToken`,
+Treat credential-bearing fields as secrets: `password`, `bambuAccessCode`, `connectRefreshToken`,
 `netatmoClientId`, `netatmoClientSecret`, and `netatmoRefreshToken`. Treat
 `cameraRtspUrl` as private deployment data. The
 [Buddy3D local endpoint](https://help.prusa3d.com/article/buddy3d-camera_821264)
 contains no embedded credential, but it is an unencrypted, unprotected live feed;
 other camera URLs may contain credentials. Also sanitize identifying values such
-as `printerHost`, `username`, `connectPrinterUuid`, local paths, print-name
+as `printerHost`, `username`, `bambuSerial`, `connectPrinterUuid`, local paths, print-name
 overrides, and tool-slot names. Operational fields are not secret, but some
 still reveal deployment details.
 
@@ -38,9 +38,12 @@ still reveal deployment details.
 | `DATA_DIR` | — | path string, `cache` | Private runtime state | `/var/lib/layer-relay` | Writable state and analysis-cache directory. |
 | `LISTEN_HOST` | `listenHost` | string, `127.0.0.1` | Deployment detail | `127.0.0.1` | HTTP bind address; Docker sets `0.0.0.0` internally. |
 | `PORT` | `port` | integer 1–65535, `8787` | Non-secret | `8787` | HTTP port. |
-| `PRINTER_HOST` | `printerHost` | non-empty string, required | Identifying | `192.0.2.10` | PrusaLink hostname or IP address. |
-| `PRINTER_USERNAME` | `username` | non-empty string, required | Credential and identifying | `maker` | PrusaLink Digest username. |
-| `PRINTER_PASSWORD` | `password` | non-empty string, required | Secret | `replace-with-your-prusalink-password` | PrusaLink password. |
+| `PRINTER_TYPE` | `printerType` | `prusa` or `bambu`, `prusa` | Non-secret | `bambu` | Printer integration selector. |
+| `PRINTER_HOST` | `printerHost` | non-empty string, required | Identifying | `192.0.2.10` | Printer hostname or IP address. Bambu uses MQTT TLS port 8883. |
+| `PRINTER_USERNAME` | `username` | non-empty string, required for Prusa | Credential and identifying | `maker` | PrusaLink Digest username. |
+| `PRINTER_PASSWORD` | `password` | non-empty string, required for Prusa | Secret | `replace-with-your-prusalink-password` | PrusaLink password. |
+| `BAMBU_SERIAL` | `bambuSerial` | string, required for Bambu | Identifying | `EXAMPLE123456` | Printer serial number, letters and digits only. |
+| `BAMBU_ACCESS_CODE` | `bambuAccessCode` | string, required for Bambu | Secret | `replace-with-your-lan-access-code` | LAN access code from the printer settings. |
 | `CAMERA_RTSP_URL` | `cameraRtspUrl` | RTSP(S) URL, empty | Private; secret if credential-bearing | `rtsp://192.0.2.20/live` | Private camera source. Buddy3D uses an unencrypted, unauthenticated local feed without credentials in the URL. |
 | `CAMERA_STREAM_ENABLED` | `cameraStreamEnabled` | boolean, automatic | Non-secret | `false` | Camera override (`true`/`false`, `1`/`0`, `yes`/`no`). |
 | `NOZZLE_RTSP_URL` | `nozzleRtspUrl` | RTSP(S) URL, empty | Private; secret if credential-bearing | `rtsp://192.0.2.20:8554/nozzle` | Optional secondary nozzle camera source, relayed to `/api/nozzle.mjpeg`. |
@@ -49,7 +52,9 @@ still reveal deployment details.
 
 Every override also accepts a `LAYER_RELAY_` prefix, for example
 `LAYER_RELAY_CONFIG` and `LAYER_RELAY_PORT`. Environment-only deployments are
-supported when all three required printer variables are present. JSON is easier
+supported with `PRINTER_HOST` and the credentials for the selected type. Prusa
+uses `PRINTER_USERNAME` and `PRINTER_PASSWORD`; Bambu uses `PRINTER_TYPE=bambu`,
+`BAMBU_SERIAL`, and `BAMBU_ACCESS_CODE`. JSON is easier
 for nested tool-slot settings.
 
 The supplied container reserves canonical `CONFIG_PATH` for its staged private
@@ -58,6 +63,13 @@ for native installs. Container deployments select the mounted input with
 `CONFIG_SOURCE_PATH` and set canonical `DATA_DIR` only when intentionally using a
 different mounted state path. Other branded overrides, including printer,
 listener, port, camera, and source URL settings, work in the container.
+
+Prusa keeps its runtime files directly in `DATA_DIR`. Bambu stores its runtime
+files in `DATA_DIR/bambu-<id>`, where `<id>` is the first 16 hexadecimal
+characters of the configured serial number's SHA-256 hash. This isolates
+last-known state, completion history, inventory overrides, and cloud token
+stores when switching from Prusa or between Bambu printers. The raw serial
+number is not used as a directory name. Back up the entire `DATA_DIR` tree.
 
 Environment overrides take precedence over JSON. The provided Docker image and
 Compose file always supply `SOURCE_CODE_URL` from image/build metadata, so set
@@ -68,12 +80,15 @@ modified container deployment.
 
 | Setting | Type and default | Sensitivity | Example | Notes |
 |---|---|---|---|---|
-| `printerHost` | non-empty string, required | Identifying | `"192.0.2.10"` | Hostname or IP only, without `http://`. |
-| `username` | non-empty string, required | Credential and identifying | `"maker"` | PrusaLink Digest username. |
-| `password` | non-empty string, required | Secret | `"replace-with-your-prusalink-password"` | PrusaLink password. |
+| `printerType` | `"prusa"` or `"bambu"`, `"prusa"` | Non-secret | `"bambu"` | Existing configurations remain on PrusaLink when omitted. |
+| `printerHost` | non-empty string, required | Identifying | `"192.0.2.10"` | Hostname or IP only, without a URL scheme. Bambu requires a bare host without a port, path, or credentials. |
+| `username` | non-empty string, required for Prusa | Credential and identifying | `"maker"` | PrusaLink Digest username; unused for Bambu. |
+| `password` | non-empty string, required for Prusa | Secret | `"replace-with-your-prusalink-password"` | PrusaLink password; unused for Bambu. |
+| `bambuSerial` | string, required for Bambu | Identifying | `"EXAMPLE123456"` | Printer serial number, at most 64 letters and digits. |
+| `bambuAccessCode` | string, required for Bambu | Secret | `"replace-with-your-lan-access-code"` | LAN access code; no whitespace or control characters. |
 | `listenHost` | non-empty string, `"127.0.0.1"` | Deployment detail | `"127.0.0.1"` | Keep loopback unless remote read access is deliberate. |
 | `port` | integer 1–65535, `8787` | Non-secret | `8787` | Local HTTP port. |
-| `pollIntervalMs` | integer at least 250, `2000` | Non-secret | `2000` | Do not aggressively lower this; the printer board is resource constrained. |
+| `pollIntervalMs` | integer at least 250, `2000` | Non-secret | `2000` | PrusaLink polling cadence. Bambu receives pushed MQTT telemetry. Do not aggressively lower this; the printer board is resource constrained. |
 | `sourceCodeUrl` | HTTP(S) URL, project repository | Public | `"https://github.com/GoByeBye/LayerRelay"` | Dashboard source/license link and HTTP `Link` target. Modified deployments must use their exact source. |
 | `toolCount` | `null` or integer 1–32, `null` | Non-secret | `null` | `null` follows the tool inventory inferred from Prusa Connect; an integer is a manual count override. |
 | `toolSettingsAllowedOrigins` | array of up to 16 exact HTTP(S) origins, `[]` | Non-secret | `["https://relay.example"]` | Extra named browser origins allowed to save tool settings. Loopback and literal IP origins are accepted automatically. Add only origins protected by your deployment boundary. |
@@ -185,7 +200,8 @@ linked product photos, package data, properties, or purchase URLs. See
 Prusa Connect is the recommended telemetry source for CORE One/INDX because
 PrusaLink does not expose the exact active tool or all of the live fields used by
 the dashboard. It needs `connectPrinterUuid` and `connectRefreshToken`; without
-both, the service stays on its PrusaLink fallback. Netatmo needs all three
+both, the service stays on its PrusaLink fallback. Prusa Connect is unused when
+`printerType` is `"bambu"`. Netatmo needs all three
 `netatmoClientId`, `netatmoClientSecret`, and `netatmoRefreshToken` values.
 Refresh tokens are sensitive and rotate into `DATA_DIR`. Keep that directory
 private and persistent.

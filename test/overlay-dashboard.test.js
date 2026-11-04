@@ -634,6 +634,22 @@ test('tool editor shows automatic Connect values without copying them into overr
   assert.equal(runtime.elements.get('tools-configure').focused, true);
 });
 
+test('Bambu automatic inventory is labelled in the dashboard and tool editor', async () => {
+  const { resolveToolSettings } = require('../tool-settings.js');
+  const overrides = { toolCount: null, toolSlots: {} };
+  const effective = resolveToolSettings(overrides, {
+    source: 'bambu', status: 'fresh', toolCount: 4,
+    toolSlots: [{ toolLabel: 1, loaded: true, material: 'PLA', color: '#FF8800' }],
+  });
+  const toolSettings = { ...overrides, detected: effective.detected, effective };
+  const runtime = createRuntime({ height: 420, toolSettings });
+  runtime.elements.get('tools-configure').dispatch('click');
+  await flushPromises();
+  assert.equal(runtime.elements.get('tool-count-source').textContent, '4 detected by Bambu');
+  assert.match(runtime.elements.get('tool-settings-summary').textContent, /Auto · Bambu fresh/);
+  assert.match(runtime.api.getToolEditorRows()[0].source.textContent, /Bambu fresh/);
+});
+
 test('Auto and Override count modes preserve hidden slot overrides', async () => {
   const runtime = createRuntime({
     height: 420,
